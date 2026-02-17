@@ -29,20 +29,17 @@ jobs:
 
       - name: Repair migration history drift
         run: |
-          # Get remote migrations not in local directory and mark them as reverted
-          REMOTE_VERSIONS=$(supabase migration list 2>&1 | grep -E '^\s+[0-9]{14}' | awk '{print $1}' || true)
-          LOCAL_VERSIONS=$(ls supabase/migrations/ 2>/dev/null | grep -oE '^[0-9]{14}' || true)
-          REPAIR_LIST=""
-          for v in $REMOTE_VERSIONS; do
-            if ! echo "$LOCAL_VERSIONS" | grep -q "^${v}$"; then
-              REPAIR_LIST="$REPAIR_LIST $v"
+          # Run db push, capture output. If drift detected, parse versions and repair.
+          OUTPUT=$(supabase db push 2>&1) && exit 0 || true
+          if echo "$OUTPUT" | grep -q "Remote migration versions not found"; then
+            VERSIONS=$(echo "$OUTPUT" | grep "supabase migration repair" | sed 's/.*--status reverted //')
+            if [ -n "$VERSIONS" ]; then
+              echo "Repairing drifted migrations: $VERSIONS"
+              supabase migration repair --status reverted $VERSIONS
             fi
-          done
-          if [ -n "$REPAIR_LIST" ]; then
-            echo "Repairing drifted migrations:$REPAIR_LIST"
-            supabase migration repair --status reverted $REPAIR_LIST
           else
-            echo "No migration drift detected"
+            echo "$OUTPUT"
+            exit 1
           fi
 
       - run: supabase db push
