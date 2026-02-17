@@ -2,7 +2,7 @@
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
 # working directory name when running `supabase init`.
-project_id = "dermitrack"
+project_id = "dermitrack-supabase"
 
 [api]
 enabled = true
@@ -349,42 +349,6 @@ enabled = false
 authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
-
-# --- Edge Functions ---
-# Functions with verify_jwt = false use custom auth (Bearer token check inside the function).
-
-[functions.admin-create-user]
-verify_jwt = false
-
-[functions.admin-update-user-email]
-verify_jwt = false
-
-[functions.admin-send-password-reset]
-verify_jwt = false
-
-[functions.push-notification]
-verify_jwt = false
-
-[functions.import-odv]
-verify_jwt = true
-
-[functions.send-push-notification]
-verify_jwt = true
-
-[functions.seed-missing-auth-users]
-verify_jwt = true
-
-[functions.create_user]
-verify_jwt = true
-
-[functions.zoho-auth-start]
-verify_jwt = true
-
-[functions.zoho-auth-callback]
-verify_jwt = false
-
-[functions.zoho-create-sales-order]
-verify_jwt = true
 
 [edge_runtime]
 enabled = true
