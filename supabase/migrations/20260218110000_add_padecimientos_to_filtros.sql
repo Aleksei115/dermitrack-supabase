@@ -1,4 +1,5 @@
 -- Add padecimientos array to get_corte_filtros_disponibles return type
+DROP FUNCTION IF EXISTS public.get_corte_filtros_disponibles();
 CREATE OR REPLACE FUNCTION public.get_corte_filtros_disponibles()
 RETURNS TABLE(marcas varchar[], medicos jsonb, padecimientos varchar[])
 LANGUAGE plpgsql
