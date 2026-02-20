@@ -37,7 +37,7 @@ const GCP_PROJECT_ID = Deno.env.get("GCP_PROJECT_ID")!;
 const GCP_REGION = Deno.env.get("GCP_REGION") || "us-central1";
 const GCP_SERVICE_ACCOUNT_KEY = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY")!;
 
-const VERTEX_MODEL = "gemini-3.0-flash";
+const VERTEX_MODEL = "gemini-3-flash-preview";
 const CATALOG_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 const SYSTEM_PROMPT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 const TOKEN_CACHE_TTL = 55 * 60 * 1000; // 55 minutes
@@ -154,7 +154,8 @@ async function callGemini(
   contents: Array<{ role: string; parts: Array<{ text: string }> }>
 ): Promise<{ text: string; tokensInput: number; tokensOutput: number }> {
   const token = await getAccessToken();
-  const url = `https://${GCP_REGION}-aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/publishers/google/models/${VERTEX_MODEL}:generateContent`;
+  // Gemini 3 models require the global endpoint
+  const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
