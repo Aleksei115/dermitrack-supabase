@@ -401,6 +401,8 @@ END;
 $function$;
 
 -- 7.2 rebuild_movimientos_inventario — include id_saga_zoho_link resolution
+-- DROP first: PROD return type has 'inventario_actualizado', we rename to 'inventario_final'
+DROP FUNCTION IF EXISTS public.rebuild_movimientos_inventario();
 CREATE OR REPLACE FUNCTION public.rebuild_movimientos_inventario()
  RETURNS TABLE(movimientos_creados bigint, inventario_final bigint)
  LANGUAGE plpgsql
