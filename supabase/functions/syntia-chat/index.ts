@@ -37,7 +37,7 @@ const GCP_PROJECT_ID = Deno.env.get("GCP_PROJECT_ID")!;
 const GCP_REGION = Deno.env.get("GCP_REGION") || "us-central1";
 const GCP_SERVICE_ACCOUNT_KEY = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY")!;
 
-const VERTEX_MODEL = "gemini-2.5-flash";
+const VERTEX_MODEL = "gemini-3.0-flash";
 const CATALOG_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 const SYSTEM_PROMPT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 const TOKEN_CACHE_TTL = 55 * 60 * 1000; // 55 minutes
