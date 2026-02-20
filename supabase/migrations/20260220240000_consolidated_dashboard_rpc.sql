@@ -347,7 +347,7 @@ market_json AS (
 -- ═══════════════════════════════════════════════════════════
 
 conversion_json AS (
-  SELECT COALESCE(json_agg(row_to_json(r) ORDER BY r.valor_generado DESC), '[]'::json) AS val
+  SELECT COALESCE(json_agg(row_to_json(r) ORDER BY r."valorGenerado" DESC), '[]'::json) AS val
   FROM (
     SELECT
       b.m_type AS "mType",
