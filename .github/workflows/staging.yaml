@@ -30,7 +30,7 @@ jobs:
       - name: Repair migration history drift
         run: |
           # Run db push, capture output. If drift detected, parse versions and repair.
-          OUTPUT=$(supabase db push 2>&1) && exit 0 || true
+          OUTPUT=$(supabase db push --include-all 2>&1) && exit 0 || true
           if echo "$OUTPUT" | grep -q "Remote migration versions not found"; then
             VERSIONS=$(echo "$OUTPUT" | grep "supabase migration repair" | sed 's/.*--status reverted //')
             if [ -n "$VERSIONS" ]; then
@@ -42,7 +42,7 @@ jobs:
             exit 1
           fi
 
-      - run: supabase db push
+      - run: supabase db push --include-all
 
   deploy-functions:
     runs-on: ubuntu-latest
