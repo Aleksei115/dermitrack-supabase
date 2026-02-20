@@ -47,6 +47,7 @@ DROP FUNCTION IF EXISTS public.get_yoy_padecimiento();
 -- ─────────────────────────────────────────────────────────────────────────────
 
 DROP FUNCTION IF EXISTS public.get_historico_conversiones_evolucion(date, date, text);
+DROP FUNCTION IF EXISTS public.get_historico_conversiones_evolucion(date, date, text, varchar[], varchar[], varchar[]);
 
 CREATE OR REPLACE FUNCTION public.get_historico_conversiones_evolucion(
   p_fecha_inicio date DEFAULT NULL,
