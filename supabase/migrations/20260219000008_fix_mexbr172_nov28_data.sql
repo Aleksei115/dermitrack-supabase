@@ -14,6 +14,12 @@
 BEGIN;
 
 -- ============================================================
+-- PREREQUISITE: Add items column to saga_zoho_links if missing
+-- (DEV had this from MCP-applied migrations; PROD needs it here)
+-- ============================================================
+ALTER TABLE saga_zoho_links ADD COLUMN IF NOT EXISTS items jsonb;
+
+-- ============================================================
 -- 1a. Delete incorrect CREACIONs and fix Y810 quantity
 -- ============================================================
 
