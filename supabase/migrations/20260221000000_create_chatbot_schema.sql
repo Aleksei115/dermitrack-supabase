@@ -24,7 +24,7 @@ CREATE TABLE chatbot.config (
 -- Conversation sessions
 CREATE TABLE chatbot.conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    id_usuario INTEGER NOT NULL REFERENCES public.usuarios(id_usuario),
+    id_usuario VARCHAR(150) NOT NULL REFERENCES public.usuarios(id_usuario),
     summary TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -39,7 +39,7 @@ CREATE TABLE chatbot.messages (
     conversation_id UUID NOT NULL REFERENCES chatbot.conversations(id) ON DELETE CASCADE,
     role VARCHAR(10) NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
-    context_cliente_id INTEGER REFERENCES public.clientes(id_cliente),
+    context_cliente_id VARCHAR(150) REFERENCES public.clientes(id_cliente),
     tokens_input INTEGER,
     tokens_output INTEGER,
     latency_ms INTEGER,
@@ -53,7 +53,7 @@ CREATE INDEX idx_messages_rating ON chatbot.messages(rating) WHERE rating IS NOT
 
 -- Daily usage tracking per user
 CREATE TABLE chatbot.usage_limits (
-    id_usuario INTEGER NOT NULL REFERENCES public.usuarios(id_usuario),
+    id_usuario VARCHAR(150) NOT NULL REFERENCES public.usuarios(id_usuario),
     fecha DATE NOT NULL DEFAULT CURRENT_DATE,
     queries_used INTEGER NOT NULL DEFAULT 0,
     queries_limit INTEGER NOT NULL,
@@ -138,7 +138,7 @@ CREATE POLICY usage_own ON chatbot.usage_limits
 
 -- Atomic check-and-increment usage (immune to race conditions)
 CREATE OR REPLACE FUNCTION chatbot.check_and_increment_usage(
-    p_id_usuario INTEGER,
+    p_id_usuario VARCHAR(150),
     p_rol TEXT
 )
 RETURNS TABLE (
@@ -203,7 +203,7 @@ $function$;
 
 -- Read-only: get remaining queries without consuming
 CREATE OR REPLACE FUNCTION chatbot.get_remaining_queries(
-    p_id_usuario INTEGER,
+    p_id_usuario VARCHAR(150),
     p_rol TEXT
 )
 RETURNS TABLE (
@@ -243,7 +243,7 @@ $function$;
 
 -- Rollback usage on Gemini failure (only callable by service_role)
 CREATE OR REPLACE FUNCTION chatbot.rollback_usage(
-    p_id_usuario INTEGER
+    p_id_usuario VARCHAR(150)
 )
 RETURNS VOID
 LANGUAGE plpgsql

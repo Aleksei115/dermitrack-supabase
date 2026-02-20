@@ -5,7 +5,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 // ============================================================================
 
 interface UserInfo {
-  id_usuario: number;
+  id_usuario: string;
   rol: string;
   auth_user_id: string;
 }
@@ -242,8 +242,8 @@ async function getCatalog(): Promise<string> {
 }
 
 async function getClientContext(
-  clienteId: number,
-  userId: number,
+  clienteId: string,
+  userId: string,
   userRol: string
 ): Promise<string | null> {
   // Verify access: ASESOR can only see assigned clients
@@ -268,7 +268,7 @@ async function getClientContext(
     admin.from("botiquin_odv").select("sku, descripcion_producto, cantidad, fecha_odv").eq("id_cliente", clienteId).order("fecha_odv", { ascending: false }).limit(10),
     admin.rpc("clasificacion_base").then((r) => {
       // Filter by client
-      return (r.data ?? []).filter((row: { id_cliente: number }) => row.id_cliente === clienteId);
+      return (r.data ?? []).filter((row: { id_cliente: string }) => row.id_cliente === clienteId);
     }),
   ]);
 
@@ -351,7 +351,7 @@ async function getConversationHistory(
   };
 }
 
-async function getPreviousSummaries(userId: number, excludeConvId?: string): Promise<string> {
+async function getPreviousSummaries(userId: string, excludeConvId?: string): Promise<string> {
   let query = admin
     .from("conversations")
     .select("summary")
@@ -589,7 +589,7 @@ async function handleSendMessage(
     ]);
 
     let clientContext = "";
-    const clienteId = body.context_cliente_id ? parseInt(body.context_cliente_id, 10) : null;
+    const clienteId = body.context_cliente_id || null;
     if (clienteId) {
       const ctx = await getClientContext(clienteId, user.id_usuario, user.rol);
       if (ctx) {
