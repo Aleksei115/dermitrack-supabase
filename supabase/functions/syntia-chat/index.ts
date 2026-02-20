@@ -55,6 +55,9 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+// Schema-scoped client for chatbot tables/functions
+const chatbot = admin.schema("chatbot");
+
 // ============================================================================
 // Caches
 // ============================================================================
@@ -191,12 +194,11 @@ async function getSystemPrompt(): Promise<string> {
     return systemPromptCache.data;
   }
 
-  const { data, error } = await admin
+  const { data, error } = await chatbot
     .from("config")
     .select("value")
     .eq("key", "system_prompt")
-    .single()
-    .schema("chatbot");
+    .single();
 
   if (error || !data) {
     throw new Error("System prompt not found in chatbot.config");
@@ -331,19 +333,17 @@ async function getClientContext(
 async function getConversationHistory(
   conversationId: string
 ): Promise<{ summary: string | null; messages: Array<{ role: string; content: string }> }> {
-  const { data: conv } = await admin
+  const { data: conv } = await chatbot
     .from("conversations")
     .select("summary")
     .eq("id", conversationId)
-    .single()
-    .schema("chatbot");
+    .single();
 
-  const { data: msgs } = await admin
+  const { data: msgs } = await chatbot
     .from("messages")
     .select("role, content")
     .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true })
-    .schema("chatbot");
+    .order("created_at", { ascending: true });
 
   return {
     summary: conv?.summary ?? null,
@@ -352,14 +352,13 @@ async function getConversationHistory(
 }
 
 async function getPreviousSummaries(userId: string, excludeConvId?: string): Promise<string> {
-  let query = admin
+  let query = chatbot
     .from("conversations")
     .select("summary")
     .eq("id_usuario", userId)
     .not("summary", "is", null)
     .order("created_at", { ascending: false })
-    .limit(3)
-    .schema("chatbot");
+    .limit(3);
 
   if (excludeConvId) {
     query = query.neq("id", excludeConvId);
@@ -381,11 +380,10 @@ async function compactConversation(conversationId: string, messages: Array<{ rol
 
     const { text } = await callGemini(systemPrompt, contents);
 
-    await admin
+    await chatbot
       .from("conversations")
       .update({ summary: text, updated_at: new Date().toISOString() })
-      .eq("id", conversationId)
-      .schema("chatbot");
+      .eq("id", conversationId);
   } catch (e) {
     console.error("Compaction failed (non-critical):", e);
   }
@@ -430,10 +428,10 @@ async function verifyJwt(req: Request): Promise<string | null> {
 // ============================================================================
 
 async function handleUsage(user: UserInfo): Promise<Response> {
-  const { data, error } = await admin.rpc("get_remaining_queries", {
+  const { data, error } = await chatbot.rpc("get_remaining_queries", {
     p_id_usuario: user.id_usuario,
     p_rol: user.rol,
-  }, { schema: "chatbot" } as unknown as undefined);
+  });
 
   if (error) {
     return jsonResponse({ error: "Error al consultar uso", details: error.message }, 500);
@@ -453,33 +451,30 @@ async function handleRate(user: UserInfo, body: { message_id: string; rating: nu
   }
 
   // Verify the message belongs to user's conversation
-  const { data: msg } = await admin
+  const { data: msg } = await chatbot
     .from("messages")
     .select("id, conversation_id, role")
     .eq("id", body.message_id)
-    .single()
-    .schema("chatbot");
+    .single();
 
   if (!msg || msg.role !== "assistant") {
     return jsonResponse({ error: "Mensaje no encontrado o no es de asistente" }, 404);
   }
 
-  const { data: conv } = await admin
+  const { data: conv } = await chatbot
     .from("conversations")
     .select("id_usuario")
     .eq("id", msg.conversation_id)
-    .single()
-    .schema("chatbot");
+    .single();
 
   if (!conv || conv.id_usuario !== user.id_usuario) {
     return jsonResponse({ error: "No tienes acceso a este mensaje" }, 403);
   }
 
-  const { error } = await admin
+  const { error } = await chatbot
     .from("messages")
     .update({ rating: body.rating, rated_at: new Date().toISOString() })
-    .eq("id", body.message_id)
-    .schema("chatbot");
+    .eq("id", body.message_id);
 
   if (error) {
     return jsonResponse({ error: "Error al calificar", details: error.message }, 500);
@@ -494,24 +489,22 @@ async function handleHistory(user: UserInfo, body: { conversation_id: string }):
   }
 
   // Verify ownership
-  const { data: conv } = await admin
+  const { data: conv } = await chatbot
     .from("conversations")
     .select("id_usuario")
     .eq("id", body.conversation_id)
-    .single()
-    .schema("chatbot");
+    .single();
 
   const isAdmin = user.rol === "OWNER" || user.rol === "ADMINISTRADOR";
   if (!conv || (conv.id_usuario !== user.id_usuario && !isAdmin)) {
     return jsonResponse({ error: "Conversacion no encontrada" }, 404);
   }
 
-  const { data: msgs, error } = await admin
+  const { data: msgs, error } = await chatbot
     .from("messages")
     .select("id, role, content, rating, rated_at, created_at")
     .eq("conversation_id", body.conversation_id)
-    .order("created_at", { ascending: true })
-    .schema("chatbot");
+    .order("created_at", { ascending: true });
 
   if (error) {
     return jsonResponse({ error: "Error al obtener historial", details: error.message }, 500);
@@ -531,10 +524,10 @@ async function handleSendMessage(
   const startTime = Date.now();
 
   // 1. Check rate limit (atomic)
-  const { data: usageData, error: usageError } = await admin.rpc("check_and_increment_usage", {
+  const { data: usageData, error: usageError } = await chatbot.rpc("check_and_increment_usage", {
     p_id_usuario: user.id_usuario,
     p_rol: user.rol,
-  }, { schema: "chatbot" } as unknown as undefined);
+  });
 
   if (usageError) {
     return jsonResponse({ error: "Error al verificar limite", details: usageError.message }, 500);
@@ -555,12 +548,11 @@ async function handleSendMessage(
     let conversationId = body.conversation_id;
     if (conversationId) {
       // Verify ownership
-      const { data: conv } = await admin
+      const { data: conv } = await chatbot
         .from("conversations")
         .select("id_usuario")
         .eq("id", conversationId)
-        .single()
-        .schema("chatbot");
+        .single();
 
       if (!conv || conv.id_usuario !== user.id_usuario) {
         conversationId = undefined;
@@ -568,12 +560,11 @@ async function handleSendMessage(
     }
 
     if (!conversationId) {
-      const { data: newConv, error: convError } = await admin
+      const { data: newConv, error: convError } = await chatbot
         .from("conversations")
         .insert({ id_usuario: user.id_usuario })
         .select("id")
-        .single()
-        .schema("chatbot");
+        .single();
 
       if (convError || !newConv) {
         throw new Error("Failed to create conversation");
@@ -672,11 +663,10 @@ async function handleSendMessage(
       },
     ];
 
-    const { data: insertedMsgs, error: insertError } = await admin
+    const { data: insertedMsgs, error: insertError } = await chatbot
       .from("messages")
       .insert(messagesToInsert)
-      .select("id, role")
-      .schema("chatbot");
+      .select("id, role");
 
     if (insertError) {
       console.error("Failed to store messages:", insertError);
@@ -685,11 +675,10 @@ async function handleSendMessage(
     const assistantMsgId = insertedMsgs?.find((m: { role: string }) => m.role === "assistant")?.id;
 
     // 7. Update conversation timestamp
-    await admin
+    await chatbot
       .from("conversations")
       .update({ updated_at: new Date().toISOString() })
-      .eq("id", conversationId)
-      .schema("chatbot");
+      .eq("id", conversationId);
 
     // 8. Trigger compaction if needed (async, does not count toward rate limit)
     const totalMessages = (history.messages.length ?? 0) + 2;
@@ -709,9 +698,9 @@ async function handleSendMessage(
   } catch (error) {
     // Rollback usage on Gemini failure
     try {
-      await admin.rpc("rollback_usage", {
+      await chatbot.rpc("rollback_usage", {
         p_id_usuario: user.id_usuario,
-      }, { schema: "chatbot" } as unknown as undefined);
+      });
     } catch (rollbackErr) {
       console.error("Rollback failed:", rollbackErr);
     }
