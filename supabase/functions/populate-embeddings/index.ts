@@ -506,12 +506,19 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // Verify service role key (admin only)
+  // Verify service_role JWT (admin only)
   const authHeader = req.headers.get("authorization");
-  const apiKey = req.headers.get("apikey");
-  if (apiKey !== SERVICE_ROLE_KEY && authHeader !== `Bearer ${SERVICE_ROLE_KEY}`) {
+  const token = authHeader?.replace("Bearer ", "");
+  let isAdmin = false;
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      isAdmin = payload.role === "service_role";
+    } catch { /* invalid JWT */ }
+  }
+  if (!isAdmin) {
     return new Response(
-      JSON.stringify({ error: "Admin access required" }),
+      JSON.stringify({ error: "Admin access required (service_role)" }),
       { status: 403, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
     );
   }
