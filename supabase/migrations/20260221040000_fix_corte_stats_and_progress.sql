@@ -272,6 +272,7 @@ BEGIN
     SELECT
       v.visit_id,
       v.id_cliente,
+      v.created_at::date AS fecha_creacion,
       v.completed_at::date AS fecha_visita,
       ROW_NUMBER() OVER (PARTITION BY v.id_cliente ORDER BY v.corte_number DESC) AS rn
     FROM visitas v
@@ -283,7 +284,7 @@ BEGIN
   current_visits AS (SELECT * FROM ranked_visits WHERE rn = 1),
   prev_visits AS (SELECT * FROM ranked_visits WHERE rn = 2),
   date_bounds AS (
-    SELECT MIN(cv.fecha_visita) AS fi, MAX(cv.fecha_visita) AS ff
+    SELECT MIN(cv.fecha_creacion) AS fi, MAX(cv.fecha_visita) AS ff
     FROM current_visits cv
   )
   SELECT db.fi, db.ff INTO v_fecha_inicio, v_fecha_fin
