@@ -2,23 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 // ============================================================================
-// Types
-// ============================================================================
-
-interface Medicamento {
-  sku: string;
-  marca: string;
-  descripcion: string;
-  contenido: string | null;
-  precio: number | null;
-  ficha_tecnica_url: string | null;
-}
-
-interface PadecimientoMap {
-  [sku: string]: string[];
-}
-
-// ============================================================================
 // Constants
 // ============================================================================
 
@@ -30,11 +13,12 @@ const GCP_SERVICE_ACCOUNT_KEY = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY")!;
 const EMBEDDING_MODEL = "text-embedding-005";
 const GEMINI_MODEL = "gemini-2.0-flash";
 const EMBEDDING_DIMENSION = 768;
-const BATCH_SIZE = 10;
-const CHUNK_SIZE = 500; // tokens ~= words for Spanish
-const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10MB
+const BATCH_SIZE = 5; // Small batches to stay within memory
+const CHUNK_SIZE = 500;
+const MAX_PDF_SIZE = 5 * 1024 * 1024; // 5MB to be safe
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 1000;
+const PAGE_SIZE = 30; // Meds per invocation
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -56,8 +40,20 @@ const chatbot = admin.schema("chatbot");
 let accessTokenCache: { token: string; expiry: number } | null = null;
 
 function base64UrlEncode(data: Uint8Array): string {
+  // Safe for small data (JWT parts only)
   const base64 = btoa(String.fromCharCode(...data));
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Convert large Uint8Array to base64 without stack overflow */
+function uint8ToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let result = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    result += String.fromCharCode(...slice);
+  }
+  return btoa(result);
 }
 
 async function createSignedJwt(serviceAccount: {
@@ -185,13 +181,12 @@ async function generateEmbeddingsBatch(
 // PDF Text Extraction via Gemini
 // ============================================================================
 
-async function extractTextFromPdf(
-  pdfBytes: Uint8Array
-): Promise<string> {
+async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
   const token = await getAccessToken();
   const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${GEMINI_MODEL}:generateContent`;
 
-  const pdfBase64 = btoa(String.fromCharCode(...pdfBytes));
+  // Use chunked base64 encoding to avoid stack overflow
+  const pdfBase64 = uint8ToBase64(pdfBytes);
 
   const res = await fetch(url, {
     method: "POST",
@@ -224,7 +219,9 @@ async function extractTextFromPdf(
   });
 
   if (!res.ok) {
-    throw new Error(`Gemini PDF extraction error (${res.status}): ${await res.text()}`);
+    throw new Error(
+      `Gemini PDF extraction error (${res.status}): ${await res.text()}`
+    );
   }
 
   const data = await res.json();
@@ -244,7 +241,6 @@ function chunkText(text: string, chunkSize: number): string[] {
     current.push(word);
     if (current.length >= chunkSize) {
       chunks.push(current.join(" "));
-      // Overlap: keep last 50 words for context continuity
       current = current.slice(-50);
     }
   }
@@ -257,40 +253,21 @@ function chunkText(text: string, chunkSize: number): string[] {
 }
 
 // ============================================================================
-// Main Pipeline
+// Paginated Medicamento Embeddings
 // ============================================================================
 
-async function populateMedicamentoEmbeddings(): Promise<{
+async function populateMedicamentoEmbeddings(
+  offset: number,
+  limit: number
+): Promise<{
   created: number;
   skipped: number;
+  total: number;
   errors: string[];
 }> {
   const errors: string[] = [];
 
-  // Get all medicamentos
-  const { data: meds, error: medsErr } = await admin
-    .from("medicamentos")
-    .select("sku, marca, descripcion, contenido, precio, ficha_tecnica_url");
-
-  if (medsErr || !meds) {
-    throw new Error(`Failed to fetch medicamentos: ${medsErr?.message}`);
-  }
-
-  // Get padecimientos mapping
-  const { data: padData } = await admin
-    .from("medicamento_padecimientos")
-    .select("sku, padecimientos(nombre)");
-
-  const padMap: PadecimientoMap = {};
-  for (const row of padData ?? []) {
-    const pad = row.padecimientos as { nombre: string } | null;
-    if (pad) {
-      if (!padMap[row.sku]) padMap[row.sku] = [];
-      padMap[row.sku].push(pad.nombre);
-    }
-  }
-
-  // Get existing embeddings
+  // Get existing SKUs that already have embeddings
   const { data: existing } = await chatbot
     .from("medicamento_embeddings")
     .select("sku");
@@ -299,30 +276,61 @@ async function populateMedicamentoEmbeddings(): Promise<{
     (existing ?? []).map((e: { sku: string }) => e.sku)
   );
 
-  // Filter to those needing embeddings
-  const toProcess = (meds as Medicamento[]).filter(
-    (m) => !existingSkus.has(m.sku)
-  );
+  // Get medicamentos page (only those WITHOUT embeddings)
+  // We fetch all SKUs and filter, then paginate the filtered list
+  const { data: allMeds, error: medsErr } = await admin
+    .from("medicamentos")
+    .select("sku, marca, descripcion, contenido, precio")
+    .order("sku");
 
-  if (toProcess.length === 0) {
-    return { created: 0, skipped: meds.length, errors };
+  if (medsErr || !allMeds) {
+    throw new Error(`Failed to fetch medicamentos: ${medsErr?.message}`);
+  }
+
+  const toProcess = allMeds.filter(
+    (m: { sku: string }) => !existingSkus.has(m.sku)
+  );
+  const total = toProcess.length;
+  const page = toProcess.slice(offset, offset + limit);
+
+  if (page.length === 0) {
+    return { created: 0, skipped: existingSkus.size, total, errors };
   }
 
   console.log(
-    `Processing ${toProcess.length} medicamentos (${existingSkus.size} already exist)`
+    `Processing meds ${offset}–${offset + page.length} of ${total} pending (${existingSkus.size} already done)`
   );
 
   let created = 0;
 
-  // Process in batches
-  for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
-    const batch = toProcess.slice(i, i + BATCH_SIZE);
+  // Process in small batches
+  for (let i = 0; i < page.length; i += BATCH_SIZE) {
+    const batch = page.slice(i, i + BATCH_SIZE);
+    const skus = batch.map((m: { sku: string }) => m.sku);
 
-    const texts = batch.map((m) => {
-      const pads = padMap[m.sku] ?? [];
-      const padStr = pads.length > 0 ? ` Padecimientos: ${pads.join(", ")}` : "";
-      return `${m.sku} ${m.marca} ${m.descripcion ?? ""} ${m.contenido ?? ""} Precio: $${m.precio ?? 0}${padStr}`;
-    });
+    // Fetch padecimientos only for this batch
+    const { data: padData } = await admin
+      .from("medicamento_padecimientos")
+      .select("sku, padecimientos(nombre)")
+      .in("sku", skus);
+
+    const padMap: Record<string, string[]> = {};
+    for (const row of padData ?? []) {
+      const pad = (row as { sku: string; padecimientos: { nombre: string } | null }).padecimientos;
+      if (pad) {
+        if (!padMap[row.sku]) padMap[row.sku] = [];
+        padMap[row.sku].push(pad.nombre);
+      }
+    }
+
+    const texts = batch.map(
+      (m: { sku: string; marca: string; descripcion: string; contenido: string | null; precio: number | null }) => {
+        const pads = padMap[m.sku] ?? [];
+        const padStr =
+          pads.length > 0 ? ` Padecimientos: ${pads.join(", ")}` : "";
+        return `${m.sku} ${m.marca} ${m.descripcion ?? ""} ${m.contenido ?? ""} Precio: $${m.precio ?? 0}${padStr}`;
+      }
+    );
 
     try {
       const embeddings = await generateEmbeddingsBatch(
@@ -330,53 +338,55 @@ async function populateMedicamentoEmbeddings(): Promise<{
         "RETRIEVAL_DOCUMENT"
       );
 
-      const rows = batch.map((m, idx) => ({
-        sku: m.sku,
-        embedding_text: texts[idx],
-        embedding: JSON.stringify(embeddings[idx]),
-        updated_at: new Date().toISOString(),
-      }));
+      // Upsert one at a time to minimize memory
+      for (let j = 0; j < batch.length; j++) {
+        const { error: upsertErr } = await chatbot
+          .from("medicamento_embeddings")
+          .upsert(
+            {
+              sku: batch[j].sku,
+              embedding_text: texts[j],
+              embedding: JSON.stringify(embeddings[j]),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "sku" }
+          );
 
-      const { error: upsertErr } = await chatbot
-        .from("medicamento_embeddings")
-        .upsert(rows, { onConflict: "sku" });
-
-      if (upsertErr) {
-        errors.push(`Batch ${i}: ${upsertErr.message}`);
-      } else {
-        created += batch.length;
+        if (upsertErr) {
+          errors.push(`${batch[j].sku}: ${upsertErr.message}`);
+        } else {
+          created++;
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`Batch ${i}: ${msg}`);
-      console.error(`Batch ${i} failed:`, msg);
+      errors.push(`Batch ${offset + i}: ${msg}`);
+      console.error(`Batch ${offset + i} failed:`, msg);
     }
 
-    // Small delay between batches to avoid rate limits
-    if (i + BATCH_SIZE < toProcess.length) {
-      await new Promise((r) => setTimeout(r, 200));
+    // Delay between batches
+    if (i + BATCH_SIZE < page.length) {
+      await new Promise((r) => setTimeout(r, 300));
     }
   }
 
-  return { created, skipped: existingSkus.size, errors };
+  return { created, skipped: existingSkus.size, total, errors };
 }
 
-async function populateFichaTecnicaChunks(): Promise<{
+// ============================================================================
+// Paginated Ficha Tecnica Chunks
+// ============================================================================
+
+async function populateFichaTecnicaChunks(
+  offset: number,
+  limit: number
+): Promise<{
   processed: number;
   skipped: number;
+  total: number;
   errors: string[];
 }> {
   const errors: string[] = [];
-
-  // Get medicamentos with ficha_tecnica_url
-  const { data: meds } = await admin
-    .from("medicamentos")
-    .select("sku, ficha_tecnica_url")
-    .not("ficha_tecnica_url", "is", null);
-
-  if (!meds || meds.length === 0) {
-    return { processed: 0, skipped: 0, errors };
-  }
 
   // Get SKUs that already have chunks
   const { data: existingChunks } = await chatbot
@@ -387,39 +397,47 @@ async function populateFichaTecnicaChunks(): Promise<{
     (existingChunks ?? []).map((e: { sku: string }) => e.sku)
   );
 
-  const toProcess = meds.filter(
+  // Get meds with fichas that need processing
+  const { data: allMeds } = await admin
+    .from("medicamentos")
+    .select("sku, ficha_tecnica_url")
+    .not("ficha_tecnica_url", "is", null)
+    .order("sku");
+
+  if (!allMeds || allMeds.length === 0) {
+    return { processed: 0, skipped: 0, total: 0, errors };
+  }
+
+  const toProcess = allMeds.filter(
     (m: { sku: string }) => !existingSkus.has(m.sku)
   );
+  const total = toProcess.length;
+  const page = toProcess.slice(offset, offset + limit);
 
-  if (toProcess.length === 0) {
-    return { processed: 0, skipped: meds.length, errors };
+  if (page.length === 0) {
+    return { processed: 0, skipped: existingSkus.size, total, errors };
   }
 
   console.log(
-    `Processing ${toProcess.length} fichas técnicas (${existingSkus.size} already exist)`
+    `Processing fichas ${offset}–${offset + page.length} of ${total} pending`
   );
 
   let processed = 0;
 
-  for (const med of toProcess) {
+  for (const med of page) {
     const sku = med.sku as string;
     const url = med.ficha_tecnica_url as string;
 
     try {
-      // Extract filename from URL (stored as path in bucket)
-      // ficha_tecnica_url format: "medicaments-technical-sheet/filename.pdf" or full URL
       let filePath = url;
       if (url.startsWith("http")) {
-        // Extract path after the bucket name
-        const match = url.match(
-          /medicaments-technical-sheet\/(.+)/
-        );
+        const match = url.match(/medicaments-technical-sheet\/(.+)/);
         filePath = match ? match[1] : url;
       } else if (url.startsWith("medicaments-technical-sheet/")) {
         filePath = url.replace("medicaments-technical-sheet/", "");
       }
 
-      // Download PDF from storage
+      // Download PDF
       const { data: pdfData, error: dlErr } = await admin.storage
         .from("medicaments-technical-sheet")
         .download(filePath);
@@ -431,59 +449,58 @@ async function populateFichaTecnicaChunks(): Promise<{
 
       const pdfBytes = new Uint8Array(await pdfData.arrayBuffer());
 
-      // Skip oversized PDFs
       if (pdfBytes.length > MAX_PDF_SIZE) {
-        errors.push(`${sku}: PDF too large (${(pdfBytes.length / 1024 / 1024).toFixed(1)}MB)`);
+        errors.push(
+          `${sku}: PDF too large (${(pdfBytes.length / 1024 / 1024).toFixed(1)}MB)`
+        );
         continue;
       }
 
-      // Extract text using Gemini multimodal
+      // Extract text
       const text = await extractTextFromPdf(pdfBytes);
 
       if (!text || text.length < 50) {
-        errors.push(`${sku}: Extracted text too short (${text.length} chars)`);
+        errors.push(
+          `${sku}: Extracted text too short (${text.length} chars)`
+        );
         continue;
       }
 
-      // Chunk the text
+      // Chunk and embed
       const chunks = chunkText(text, CHUNK_SIZE);
 
-      // Generate embeddings for all chunks
-      const chunkTexts = chunks.map(
-        (c, idx) => `Ficha tecnica ${sku} (parte ${idx + 1}): ${c}`
-      );
+      // Process one embedding batch at a time and insert immediately
+      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const chunkBatch = chunks.slice(i, i + BATCH_SIZE);
+        const chunkTexts = chunkBatch.map(
+          (c, idx) => `Ficha tecnica ${sku} (parte ${i + idx + 1}): ${c}`
+        );
 
-      // Process chunk embeddings in batches
-      const allEmbeddings: number[][] = [];
-      for (let i = 0; i < chunkTexts.length; i += BATCH_SIZE) {
-        const batch = chunkTexts.slice(i, i + BATCH_SIZE);
-        const embs = await generateEmbeddingsBatch(
-          batch,
+        const embeddings = await generateEmbeddingsBatch(
+          chunkTexts,
           "RETRIEVAL_DOCUMENT"
         );
-        allEmbeddings.push(...embs);
+
+        const rows = chunkBatch.map((content, idx) => ({
+          sku,
+          chunk_index: i + idx,
+          content,
+          embedding: JSON.stringify(embeddings[idx]),
+        }));
+
+        const { error: insertErr } = await chatbot
+          .from("ficha_tecnica_chunks")
+          .upsert(rows, { onConflict: "sku,chunk_index" });
+
+        if (insertErr) {
+          errors.push(`${sku} chunk ${i}: ${insertErr.message}`);
+        }
       }
 
-      // Insert chunks with embeddings
-      const rows = chunks.map((content, idx) => ({
-        sku,
-        chunk_index: idx,
-        content,
-        embedding: JSON.stringify(allEmbeddings[idx]),
-      }));
-
-      const { error: insertErr } = await chatbot
-        .from("ficha_tecnica_chunks")
-        .upsert(rows, { onConflict: "sku,chunk_index" });
-
-      if (insertErr) {
-        errors.push(`${sku}: Insert failed — ${insertErr.message}`);
-      } else {
-        processed++;
-        console.log(
-          `${sku}: ${chunks.length} chunks created from ${text.length} chars`
-        );
-      }
+      processed++;
+      console.log(
+        `${sku}: ${chunks.length} chunks from ${text.length} chars`
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`${sku}: ${msg}`);
@@ -494,7 +511,7 @@ async function populateFichaTecnicaChunks(): Promise<{
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  return { processed, skipped: existingSkus.size, errors };
+  return { processed, skipped: existingSkus.size, total, errors };
 }
 
 // ============================================================================
@@ -509,45 +526,64 @@ Deno.serve(async (req: Request) => {
   // Verify service_role JWT (admin only)
   const authHeader = req.headers.get("authorization");
   const token = authHeader?.replace("Bearer ", "");
-  let isAdmin = false;
+  let isServiceRole = false;
   if (token) {
     try {
       const payload = JSON.parse(atob(token.split(".")[1]));
-      isAdmin = payload.role === "service_role";
-    } catch { /* invalid JWT */ }
+      isServiceRole = payload.role === "service_role";
+    } catch {
+      /* invalid JWT */
+    }
   }
-  if (!isAdmin) {
+  if (!isServiceRole) {
     return new Response(
       JSON.stringify({ error: "Admin access required (service_role)" }),
-      { status: 403, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
+      {
+        status: 403,
+        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+      }
     );
   }
 
   try {
     const url = new URL(req.url);
-    const mode = url.searchParams.get("mode") || "all";
+    const mode = url.searchParams.get("mode") || "medicamentos";
+    const offset = parseInt(url.searchParams.get("offset") || "0", 10);
+    const limit = parseInt(
+      url.searchParams.get("limit") || String(PAGE_SIZE),
+      10
+    );
 
-    const results: Record<string, unknown> = {};
+    console.log(`=== populate-embeddings mode=${mode} offset=${offset} limit=${limit} ===`);
 
-    if (mode === "all" || mode === "medicamentos") {
-      console.log("=== Starting medicamento embeddings ===");
-      results.medicamentos = await populateMedicamentoEmbeddings();
+    let result: Record<string, unknown>;
+
+    if (mode === "medicamentos") {
+      result = await populateMedicamentoEmbeddings(offset, limit);
+    } else if (mode === "fichas") {
+      result = await populateFichaTecnicaChunks(offset, limit);
+    } else {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid mode. Use ?mode=medicamentos or ?mode=fichas',
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+        }
+      );
     }
 
-    if (mode === "all" || mode === "fichas") {
-      console.log("=== Starting ficha técnica chunks ===");
-      results.fichas = await populateFichaTecnicaChunks();
-    }
-
-    return new Response(JSON.stringify({ success: true, results }), {
-      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-    });
+    return new Response(
+      JSON.stringify({ success: true, mode, offset, limit, ...result }),
+      { headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Pipeline error:", msg);
-    return new Response(
-      JSON.stringify({ error: msg }),
-      { status: 500, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
-    );
+    return new Response(JSON.stringify({ error: msg }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    });
   }
 });
