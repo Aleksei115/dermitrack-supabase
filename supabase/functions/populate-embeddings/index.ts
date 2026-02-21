@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 
 // ============================================================================
 // Constants
@@ -45,15 +46,9 @@ function base64UrlEncode(data: Uint8Array): string {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** Convert large Uint8Array to base64 without stack overflow */
+/** Convert Uint8Array to base64 using native Deno encoder (fast) */
 function uint8ToBase64(bytes: Uint8Array): string {
-  const CHUNK = 8192;
-  let result = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-    result += String.fromCharCode(...slice);
-  }
-  return btoa(result);
+  return encodeBase64(bytes);
 }
 
 async function createSignedJwt(serviceAccount: {
