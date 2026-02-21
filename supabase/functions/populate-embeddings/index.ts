@@ -178,15 +178,25 @@ async function generateEmbeddingsBatch(
 }
 
 // ============================================================================
-// PDF Text Extraction via Gemini
+// Document Text Extraction via Gemini (PDF + images)
 // ============================================================================
 
-async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
+function getMimeType(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "application/pdf";
+}
+
+async function extractTextFromDocument(
+  fileBytes: Uint8Array,
+  mimeType: string
+): Promise<string> {
   const token = await getAccessToken();
   const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${GEMINI_MODEL}:generateContent`;
 
-  // Use chunked base64 encoding to avoid stack overflow
-  const pdfBase64 = uint8ToBase64(pdfBytes);
+  const fileBase64 = uint8ToBase64(fileBytes);
 
   const res = await fetch(url, {
     method: "POST",
@@ -201,12 +211,12 @@ async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
           parts: [
             {
               inlineData: {
-                mimeType: "application/pdf",
-                data: pdfBase64,
+                mimeType,
+                data: fileBase64,
               },
             },
             {
-              text: "Extrae TODO el texto de este documento PDF de ficha tecnica de medicamento. Incluye: composicion, indicaciones, contraindicaciones, dosificacion, presentacion, y cualquier informacion clinica. Responde SOLO con el texto extraido, sin comentarios ni formato adicional.",
+              text: "Extrae TODO el texto de este documento de ficha tecnica de medicamento. Incluye: composicion, indicaciones, contraindicaciones, dosificacion, presentacion, y cualquier informacion clinica. Responde SOLO con el texto extraido, sin comentarios ni formato adicional.",
             },
           ],
         },
@@ -220,7 +230,7 @@ async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
 
   if (!res.ok) {
     throw new Error(
-      `Gemini PDF extraction error (${res.status}): ${await res.text()}`
+      `Gemini extraction error (${res.status}): ${await res.text()}`
     );
   }
 
@@ -437,27 +447,30 @@ async function populateFichaTecnicaChunks(
         filePath = url.replace("medicaments-technical-sheet/", "");
       }
 
-      // Download PDF
-      const { data: pdfData, error: dlErr } = await admin.storage
+      // Detect MIME type from file extension
+      const mimeType = getMimeType(filePath);
+
+      // Download file
+      const { data: fileData, error: dlErr } = await admin.storage
         .from("medicaments-technical-sheet")
         .download(filePath);
 
-      if (dlErr || !pdfData) {
+      if (dlErr || !fileData) {
         errors.push(`${sku}: Download failed — ${dlErr?.message}`);
         continue;
       }
 
-      const pdfBytes = new Uint8Array(await pdfData.arrayBuffer());
+      const fileBytes = new Uint8Array(await fileData.arrayBuffer());
 
-      if (pdfBytes.length > MAX_PDF_SIZE) {
+      if (fileBytes.length > MAX_PDF_SIZE) {
         errors.push(
-          `${sku}: PDF too large (${(pdfBytes.length / 1024 / 1024).toFixed(1)}MB)`
+          `${sku}: File too large (${(fileBytes.length / 1024 / 1024).toFixed(1)}MB)`
         );
         continue;
       }
 
-      // Extract text
-      const text = await extractTextFromPdf(pdfBytes);
+      // Extract text (works for PDF and images)
+      const text = await extractTextFromDocument(fileBytes, mimeType);
 
       if (!text || text.length < 50) {
         errors.push(
