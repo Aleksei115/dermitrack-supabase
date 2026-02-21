@@ -19,14 +19,14 @@ CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public;
 CREATE SCHEMA IF NOT EXISTS chatbot;
 
 -- Config table (system prompt, settings)
-CREATE TABLE chatbot.config (
+CREATE TABLE IF NOT EXISTS chatbot.config (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- Conversations
-CREATE TABLE chatbot.conversations (
+CREATE TABLE IF NOT EXISTS chatbot.conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   id_usuario VARCHAR NOT NULL REFERENCES usuarios(id_usuario),
   summary TEXT,
@@ -34,11 +34,11 @@ CREATE TABLE chatbot.conversations (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_conversations_usuario ON chatbot.conversations(id_usuario);
-CREATE INDEX idx_conversations_updated ON chatbot.conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_usuario ON chatbot.conversations(id_usuario);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated ON chatbot.conversations(updated_at DESC);
 
 -- Messages
-CREATE TABLE chatbot.messages (
+CREATE TABLE IF NOT EXISTS chatbot.messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID NOT NULL REFERENCES chatbot.conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -52,10 +52,10 @@ CREATE TABLE chatbot.messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX idx_messages_conversation ON chatbot.messages(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON chatbot.messages(conversation_id, created_at);
 
 -- Usage limits
-CREATE TABLE chatbot.usage_limits (
+CREATE TABLE IF NOT EXISTS chatbot.usage_limits (
   id_usuario VARCHAR PRIMARY KEY REFERENCES usuarios(id_usuario),
   queries_today INTEGER DEFAULT 0,
   last_query_date DATE DEFAULT CURRENT_DATE,
@@ -161,18 +161,18 @@ $$;
 -- ============================================================================
 
 -- Medicamento embeddings (one per SKU)
-CREATE TABLE chatbot.medicamento_embeddings (
+CREATE TABLE IF NOT EXISTS chatbot.medicamento_embeddings (
   sku VARCHAR PRIMARY KEY REFERENCES medicamentos(sku),
   embedding_text TEXT NOT NULL,
   embedding extensions.vector(768),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX med_emb_hnsw_idx ON chatbot.medicamento_embeddings
+CREATE INDEX IF NOT EXISTS med_emb_hnsw_idx ON chatbot.medicamento_embeddings
   USING hnsw (embedding extensions.vector_cosine_ops);
 
 -- Ficha técnica chunks (PDF content split into chunks)
-CREATE TABLE chatbot.ficha_tecnica_chunks (
+CREATE TABLE IF NOT EXISTS chatbot.ficha_tecnica_chunks (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   sku VARCHAR NOT NULL REFERENCES medicamentos(sku),
   chunk_index INT NOT NULL,
@@ -182,7 +182,7 @@ CREATE TABLE chatbot.ficha_tecnica_chunks (
   UNIQUE(sku, chunk_index)
 );
 
-CREATE INDEX ficha_emb_hnsw_idx ON chatbot.ficha_tecnica_chunks
+CREATE INDEX IF NOT EXISTS ficha_emb_hnsw_idx ON chatbot.ficha_tecnica_chunks
   USING hnsw (embedding extensions.vector_cosine_ops);
 
 -- ============================================================================
@@ -367,6 +367,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS trg_medicamento_embedding_stale ON medicamentos;
 CREATE TRIGGER trg_medicamento_embedding_stale
   AFTER UPDATE OF sku, marca, descripcion, contenido, precio
   ON medicamentos
