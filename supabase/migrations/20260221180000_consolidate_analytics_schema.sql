@@ -1117,7 +1117,9 @@ $fn$;
 
 -- ─── 2g: Facturacion overloads ──────────────────────────────────────────────
 
-CREATE OR REPLACE FUNCTION analytics.get_facturacion_composicion()
+-- NOTE: Named _legacy to avoid PostgreSQL overload ambiguity with the 5-param version
+-- (both match zero-arg calls when all params have DEFAULTs)
+CREATE OR REPLACE FUNCTION analytics.get_facturacion_composicion_legacy()
 RETURNS TABLE(id_cliente character varying, nombre_cliente character varying, rango_actual character varying, activo boolean, baseline numeric, facturacion_actual numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, pct_crecimiento numeric, pct_vinculado numeric, valor_vinculado numeric, piezas_vinculadas bigint, skus_vinculados bigint)
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path TO 'public'
@@ -1500,7 +1502,7 @@ CREATE OR REPLACE FUNCTION public.get_facturacion_composicion()
 RETURNS TABLE(id_cliente character varying, nombre_cliente character varying, rango_actual character varying, activo boolean, baseline numeric, facturacion_actual numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, pct_crecimiento numeric, pct_vinculado numeric, valor_vinculado numeric, piezas_vinculadas bigint, skus_vinculados bigint)
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path TO 'public'
-AS $$ SELECT * FROM analytics.get_facturacion_composicion(); $$;
+AS $$ SELECT * FROM analytics.get_facturacion_composicion_legacy(); $$;
 
 CREATE OR REPLACE FUNCTION public.get_facturacion_composicion(
   p_medicos character varying[] DEFAULT NULL,
@@ -1642,7 +1644,7 @@ GRANT EXECUTE ON FUNCTION analytics.get_corte_stats_generales_con_comparacion() 
 GRANT EXECUTE ON FUNCTION analytics.get_conversion_metrics(character varying[], character varying[], character varying[], date, date) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION analytics.get_conversion_details(character varying[], character varying[], character varying[], date, date) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION analytics.get_historico_conversiones_evolucion(date, date, text, character varying[], character varying[], character varying[]) TO authenticated, anon;
-GRANT EXECUTE ON FUNCTION analytics.get_facturacion_composicion() TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION analytics.get_facturacion_composicion_legacy() TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION analytics.get_facturacion_composicion(character varying[], character varying[], character varying[], date, date) TO authenticated, anon;
 
 -- Grant on public wrappers (permissions preserved by CREATE OR REPLACE, but explicit for clarity)
