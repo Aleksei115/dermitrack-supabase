@@ -76,7 +76,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const chatbot = admin.schema("chatbot");
 
 // ============================================================================
-// Tool Declarations — 17 tools for Gemini function calling
+// Tool Declarations — 18 tools for Gemini function calling
 // ============================================================================
 
 const TOOL_DECLARATIONS = {
@@ -246,7 +246,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_ranking_productos",
           description:
-            "Obtiene ranking de productos por interes/movimiento: ventas, creaciones, recolecciones, stock activo. Sin fechas devuelve datos de toda la historia. Con fechas filtra el periodo.",
+            "Obtiene ranking de productos por CONTEO de movimientos (piezas): cuantas piezas se vendieron, crearon, recolectaron, y cuantas hay en stock activo. NO incluye valor monetario — para ingresos/dinero usa get_ranking_ventas.",
           parameters: {
             type: "object",
             properties: {
@@ -269,23 +269,27 @@ const TOOL_DECLARATIONS = {
           },
         },
         {
-          name: "get_rendimiento_marcas",
+          name: "get_ranking_ventas",
           description:
-            "Obtiene rendimiento por marca: ingresos, piezas vendidas. Sin fechas devuelve datos de toda la historia. Con fechas filtra el periodo.",
+            "Ranking de productos por INGRESOS TOTALES (M1+M2+M3). Incluye desglose: ventas_botiquin (M1=ventas directas de botiquin), ventas_conversion (M2=productos que pasaron de botiquin a ODV), ventas_exposicion (M3=productos expuestos en botiquin que luego se vendieron en ODV). USA ESTA HERRAMIENTA cuando pregunten por dinero, ingresos, o valor de ventas de productos.",
           parameters: {
             type: "object",
             properties: {
-              fecha_inicio: {
-                type: "string",
-                description:
-                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
-              },
-              fecha_fin: {
-                type: "string",
-                description:
-                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              limite: {
+                type: "integer",
+                description: "Maximo de productos (default 20)",
               },
             },
+            required: [],
+          },
+        },
+        {
+          name: "get_rendimiento_marcas",
+          description:
+            "Rendimiento por marca con desglose M1/M2/M3: ventas_botiquin (M1), ventas_conversion (M2), ventas_exposicion (M3), y total. USA ESTA HERRAMIENTA para preguntas de ingresos o dinero por marca.",
+          parameters: {
+            type: "object",
+            properties: {},
             required: [],
           },
         },
@@ -640,7 +644,7 @@ async function executeTool(
         const nombre = args.nombre as string;
         const { data, error } = await chatbot.rpc("fuzzy_search_clientes", {
           p_search: nombre,
-          p_id_usuario: isAdmin ? null : userId,
+          p_id_usuario: null,
           p_limit: 5,
         });
         if (error) return `Error: ${error.message}`;
@@ -678,7 +682,7 @@ async function executeTool(
         const { data, error } = await chatbot.rpc("get_movimientos_doctor", {
           p_id_cliente: idCliente,
           p_id_usuario: userId,
-          p_is_admin: isAdmin,
+          p_is_admin: true,
           p_fuente: fuente,
           p_limite: limite,
         });
@@ -712,7 +716,7 @@ async function executeTool(
         const limite = (args.limite as number) ?? 50;
         const { data, error } = await chatbot.rpc("get_ventas_odv_usuario", {
           p_id_usuario: userId,
-          p_is_admin: isAdmin,
+          p_is_admin: true,
           p_sku_filter: skuFilter,
           p_limite: limite,
         });
@@ -767,33 +771,15 @@ async function executeTool(
       }
 
       case "get_estadisticas_por_medico": {
-        const [statsResult, clientsResult] = await Promise.all([
-          admin.rpc("get_corte_stats_por_medico_con_comparacion"),
-          isAdmin
-            ? Promise.resolve({ data: null })
-            : admin
-                .from("clientes")
-                .select("id_cliente")
-                .eq("id_usuario", userId),
-        ]);
-        if (statsResult.error) return `Error: ${statsResult.error.message}`;
-        if (!statsResult.data?.length) return "No hay estadisticas por medico.";
+        const { data: statsData, error: statsError } = await admin.rpc(
+          "get_corte_stats_por_medico_con_comparacion"
+        );
+        if (statsError) return `Error: ${statsError.message}`;
+        if (!statsData?.length) return "No hay estadisticas por medico.";
 
-        let filtered = statsResult.data as AnyRow[];
-        if (!isAdmin && clientsResult.data) {
-          const clientIds = new Set(
-            (clientsResult.data as AnyRow[]).map((c) => c.id_cliente)
-          );
-          filtered = filtered.filter((m) =>
-            m.id_cliente ? clientIds.has(m.id_cliente) : true
-          );
-        }
-
-        if (!filtered.length)
-          return "No hay estadisticas para tus medicos en el corte actual.";
-        const limited = filtered.slice(0, 30);
+        const limited = (statsData as AnyRow[]).slice(0, 30);
         return (
-          `Estadisticas por medico (${filtered.length} total, mostrando ${limited.length}):\n` +
+          `Estadisticas por medico (${(statsData as AnyRow[]).length} total, mostrando ${limited.length}):\n` +
           limited.map((m) => JSON.stringify(m)).join("\n")
         );
       }
@@ -814,17 +800,33 @@ async function executeTool(
           .join("\n");
       }
 
+      case "get_ranking_ventas": {
+        const limite = (args.limite as number) ?? 20;
+        const { data, error } = await chatbot.rpc(
+          "get_ranking_ventas_completo",
+          { p_limite: limite }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No hay datos de ventas.";
+        return (data as AnyRow[])
+          .map(
+            (p) =>
+              `${p.sku}: ${p.descripcion} (${p.marca}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`
+          )
+          .join("\n");
+      }
+
       case "get_rendimiento_marcas": {
-        const fechaInicio = (args.fecha_inicio as string) ?? null;
-        const fechaFin = (args.fecha_fin as string) ?? null;
-        const { data, error } = await admin.rpc("get_brand_performance", {
-          p_fecha_inicio: fechaInicio,
-          p_fecha_fin: fechaFin,
-        });
+        const { data, error } = await chatbot.rpc(
+          "get_rendimiento_marcas_completo"
+        );
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de rendimiento por marca.";
         return (data as AnyRow[])
-          .map((b) => JSON.stringify(b))
+          .map(
+            (b) =>
+              `${b.marca} | Botiquin(M1): ${b.piezas_botiquin}pz $${b.ventas_botiquin} | Conversion(M2): ${b.piezas_conversion}pz $${b.ventas_conversion} | Exposicion(M3): ${b.piezas_exposicion}pz $${b.ventas_exposicion} | TOTAL: ${b.piezas_totales}pz $${b.ventas_totales}`
+          )
           .join("\n");
       }
 
@@ -843,35 +845,19 @@ async function executeTool(
       case "get_facturacion_medicos": {
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
-        const [facResult, clientsResult] = await Promise.all([
-          admin.rpc("get_facturacion_composicion", {
+        const { data: facData, error: facError } = await admin.rpc(
+          "get_facturacion_composicion",
+          {
             p_fecha_inicio: fechaInicio,
             p_fecha_fin: fechaFin,
-          }),
-          isAdmin
-            ? Promise.resolve({ data: null })
-            : admin
-                .from("clientes")
-                .select("id_cliente")
-                .eq("id_usuario", userId),
-        ]);
-        if (facResult.error) return `Error: ${facResult.error.message}`;
-        if (!facResult.data?.length)
+          }
+        );
+        if (facError) return `Error: ${facError.message}`;
+        if (!facData?.length)
           return "No hay datos de facturacion por medico.";
-        let filtered = facResult.data as AnyRow[];
-        if (!isAdmin && clientsResult.data) {
-          const clientIds = new Set(
-            (clientsResult.data as AnyRow[]).map((c) => c.id_cliente)
-          );
-          filtered = filtered.filter((m) =>
-            m.id_cliente ? clientIds.has(m.id_cliente) : true
-          );
-        }
-        if (!filtered.length)
-          return "No hay datos de facturacion para tus medicos.";
-        const limited = filtered.slice(0, 30);
+        const limited = (facData as AnyRow[]).slice(0, 30);
         return (
-          `Facturacion por medico (${filtered.length} total, mostrando ${limited.length}):\n` +
+          `Facturacion por medico (${(facData as AnyRow[]).length} total, mostrando ${limited.length}):\n` +
           limited
             .map(
               (m) =>
