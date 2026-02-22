@@ -17,9 +17,20 @@ interface UsageResult {
   remaining: number;
 }
 
+interface GeminiPart {
+  text?: string;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+}
+
+interface GeminiContent {
+  role: string;
+  parts: GeminiPart[];
+}
+
 interface GeminiSSEChunk {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
+    content?: { role?: string; parts?: GeminiPart[] };
     finishReason?: string;
   }>;
   usageMetadata?: {
@@ -44,6 +55,8 @@ const SYSTEM_PROMPT_CACHE_TTL = 10 * 60 * 1000;
 const TOKEN_CACHE_TTL = 55 * 60 * 1000;
 const COMPACTION_THRESHOLD = 8;
 const MAX_HISTORY_MESSAGES = 8;
+const MAX_TOOL_ITERATIONS = 3;
+const MAX_TOOL_RESULT_LENGTH = 8000;
 const RATE_LIMIT_MESSAGE =
   "Los creditos diarios se han agotado. Si requieres mas, contactate con el administrador.";
 
@@ -61,6 +74,225 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const chatbot = admin.schema("chatbot");
 
 // ============================================================================
+// Tool Declarations — 13 tools for Gemini function calling
+// ============================================================================
+
+const TOOL_DECLARATIONS = {
+  tools: [
+    {
+      functionDeclarations: [
+        {
+          name: "search_medicamentos",
+          description:
+            "Busca medicamentos por similitud semantica. Usa cuando pregunten por productos para un padecimiento, condicion medica, o tipo de tratamiento.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description:
+                  "Texto de busqueda: padecimiento, sintoma, tipo de producto, o nombre de medicamento",
+              },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "search_fichas_tecnicas",
+          description:
+            "Busca informacion tecnica de productos (composicion, indicaciones, contraindicaciones, modo de uso). Usa cuando pregunten por detalles tecnicos o fichas de un producto.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description:
+                  "Texto de busqueda: nombre de producto, ingrediente activo, o consulta tecnica",
+              },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "search_clientes",
+          description:
+            "Busca medicos/clientes por nombre. SIEMPRE usa esta herramienta primero cuando mencionen un nombre de medico para obtener su id_cliente antes de consultar datos del medico.",
+          parameters: {
+            type: "object",
+            properties: {
+              nombre: {
+                type: "string",
+                description:
+                  "Nombre del medico a buscar (puede ser parcial, ej: 'Garcia', 'Dr Lopez')",
+              },
+            },
+            required: ["nombre"],
+          },
+        },
+        {
+          name: "get_inventario_doctor",
+          description:
+            "Obtiene el inventario actual del botiquin de un medico especifico. Muestra SKUs, cantidades y precios. Requiere id_cliente (obtenido via search_clientes).",
+          parameters: {
+            type: "object",
+            properties: {
+              id_cliente: {
+                type: "string",
+                description: "ID del cliente/medico",
+              },
+            },
+            required: ["id_cliente"],
+          },
+        },
+        {
+          name: "get_movimientos_doctor",
+          description:
+            "Obtiene historial de movimientos de un medico: creaciones, ventas, recolecciones del botiquin y/o ventas recurrentes ODV. Util para tendencias y analisis historico.",
+          parameters: {
+            type: "object",
+            properties: {
+              id_cliente: {
+                type: "string",
+                description: "ID del cliente/medico",
+              },
+              fuente: {
+                type: "string",
+                enum: ["botiquin", "odv", "ambos"],
+                description:
+                  "Fuente de datos: 'botiquin' para movimientos de inventario, 'odv' para ventas recurrentes, 'ambos' para todo (default: ambos)",
+              },
+              limite: {
+                type: "integer",
+                description:
+                  "Numero maximo de resultados (default 30, max 100)",
+              },
+            },
+            required: ["id_cliente"],
+          },
+        },
+        {
+          name: "get_clasificacion_cliente",
+          description:
+            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=solo botiquin, M2=conversion botiquin a ODV, M3=solo ODV. Util para estrategia comercial.",
+          parameters: {
+            type: "object",
+            properties: {
+              id_cliente: {
+                type: "string",
+                description: "ID del cliente/medico",
+              },
+            },
+            required: ["id_cliente"],
+          },
+        },
+        {
+          name: "get_ventas_odv_usuario",
+          description:
+            "Obtiene ventas ODV (recurrentes) de TODOS los clientes del usuario actual. Usa para ver el portafolio completo de ventas recurrentes del asesor.",
+          parameters: {
+            type: "object",
+            properties: {
+              sku_filter: {
+                type: "string",
+                description: "Filtrar por SKU especifico (opcional)",
+              },
+              limite: {
+                type: "integer",
+                description:
+                  "Numero maximo de resultados (default 50, max 200)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_recolecciones",
+          description:
+            "Obtiene recolecciones (devoluciones de productos) del usuario. Incluye estado, items recolectados, observaciones de CEDIS.",
+          parameters: {
+            type: "object",
+            properties: {
+              id_cliente: {
+                type: "string",
+                description:
+                  "Filtrar por medico especifico (opcional). Si no se proporciona, devuelve todas las recolecciones del usuario.",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_estadisticas_corte",
+          description:
+            "Obtiene estadisticas generales del corte actual: total ventas, creaciones, recolecciones, con comparacion vs corte anterior. Para preguntas sobre cifras globales del periodo.",
+          parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          name: "get_estadisticas_por_medico",
+          description:
+            "Obtiene estadisticas del corte actual desglosadas por medico: ventas, creaciones, recolecciones por doctor. Para rankings o comparaciones entre medicos.",
+          parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          name: "get_ranking_productos",
+          description:
+            "Obtiene ranking de productos por interes/movimiento: ventas, creaciones, recolecciones, stock activo. Para saber que SKU se vende o se mueve mas.",
+          parameters: {
+            type: "object",
+            properties: {
+              limite: {
+                type: "integer",
+                description: "Numero maximo de productos (default 20)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_rendimiento_marcas",
+          description:
+            "Obtiene rendimiento por marca: ingresos, piezas vendidas. Para comparar marcas y ver cual genera mas ingresos.",
+          parameters: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          name: "get_precios_medicamentos",
+          description:
+            "Busca precios de medicamentos por nombre, SKU, o descripcion. Incluye fecha de ultima actualizacion del precio.",
+          parameters: {
+            type: "object",
+            properties: {
+              busqueda: {
+                type: "string",
+                description:
+                  "Nombre del producto, SKU, o termino de busqueda",
+              },
+              marca: {
+                type: "string",
+                description: "Filtrar por marca (opcional)",
+              },
+            },
+            required: ["busqueda"],
+          },
+        },
+      ],
+    },
+  ],
+  toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+};
+
+// ============================================================================
 // Caches
 // ============================================================================
 
@@ -68,7 +300,7 @@ let systemPromptCache: { data: string; expiry: number } | null = null;
 let accessTokenCache: { token: string; expiry: number } | null = null;
 
 // ============================================================================
-// Vertex AI Auth (Service Account JWT → OAuth2 Token)
+// Vertex AI Auth (Service Account JWT -> OAuth2 Token)
 // ============================================================================
 
 function base64UrlEncode(data: Uint8Array): string {
@@ -176,12 +408,12 @@ async function generateEmbedding(
 }
 
 // ============================================================================
-// Gemini API — Non-streaming (for compaction)
+// Gemini API — Non-streaming (for compaction only, no tools)
 // ============================================================================
 
 async function callGemini(
   systemPrompt: string,
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>
+  contents: GeminiContent[]
 ): Promise<{ text: string; tokensInput: number; tokensOutput: number }> {
   const token = await getAccessToken();
   const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:generateContent`;
@@ -243,434 +475,269 @@ async function getSystemPrompt(): Promise<string> {
 }
 
 // ============================================================================
-// RAG: Semantic Search Context
+// Tool Execution — dispatches function calls to Supabase RPCs
 // ============================================================================
 
-async function getRelevantMedicamentos(
-  queryEmbedding: number[]
-): Promise<string> {
-  const { data, error } = await chatbot.rpc("match_medicamentos", {
-    query_embedding: JSON.stringify(queryEmbedding),
-    match_threshold: 0.60,
-    match_count: 10,
-  });
-
-  if (error || !data || data.length === 0) return "";
-
-  const lines = data.map(
-    (m: {
-      sku: string;
-      descripcion: string;
-      marca: string;
-      precio: number;
-      contenido: string;
-      padecimientos: string;
-    }) =>
-      `- ${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | ${m.padecimientos || "Sin padecimiento"}`
-  );
-
-  return `MEDICAMENTOS RELEVANTES (${data.length}):\n${lines.join("\n")}`;
+function truncateResult(text: string): string {
+  if (text.length <= MAX_TOOL_RESULT_LENGTH) return text;
+  return text.substring(0, MAX_TOOL_RESULT_LENGTH) + "\n... (resultado truncado)";
 }
 
-async function getRelevantFichas(
-  queryEmbedding: number[]
-): Promise<string> {
-  const { data, error } = await chatbot.rpc("match_fichas", {
-    query_embedding: JSON.stringify(queryEmbedding),
-    match_threshold: 0.65,
-    match_count: 3,
-  });
+// deno-lint-ignore no-explicit-any
+type AnyRow = Record<string, any>;
 
-  if (error || !data || data.length === 0) return "";
-
-  const sections = data.map(
-    (f: { sku: string; content: string }) => `[${f.sku}]: ${f.content}`
-  );
-
-  return `INFORMACION DE FICHAS TECNICAS:\n${sections.join("\n\n")}`;
-}
-
-async function getFallbackCatalog(): Promise<string> {
-  const { data: meds } = await admin
-    .from("medicamentos")
-    .select("sku, marca, precio")
-    .order("sku");
-
-  const { data: pads } = await admin
-    .from("padecimientos")
-    .select("nombre");
-
-  const medLines = (meds ?? []).map(
-    (m: { sku: string; marca: string; precio: number }) =>
-      `${m.sku} (${m.marca}) $${m.precio}`
-  );
-
-  return `CATALOGO RESUMIDO (${medLines.length} productos):\n${medLines.join(", ")}\n\nPADECIMIENTOS: ${(pads ?? []).map((p: { nombre: string }) => p.nombre).join(", ")}`;
-}
-
-// ============================================================================
-// RAG: Role-filtered Client Context
-// ============================================================================
-
-async function getClientContext(
-  clienteId: string,
-  user: UserInfo
-): Promise<string | null> {
-  const { isAdmin, userId } = getUserFilter(user);
-
-  // Verify access
-  if (!isAdmin) {
-    const { data: cliente } = await admin
-      .from("clientes")
-      .select("id_cliente, id_usuario")
-      .eq("id_cliente", clienteId)
-      .single();
-
-    if (!cliente || cliente.id_usuario !== userId) {
-      return null;
-    }
-  }
-
-  // Fetch client data in parallel
-  const [clienteRes, invRes, movRes, odvRes, botOdvRes, clasRes, skuDispRes] =
-    await Promise.all([
-      admin
-        .from("clientes")
-        .select("id_cliente, nombre_cliente")
-        .eq("id_cliente", clienteId)
-        .single(),
-      admin
-        .from("inventario_botiquin")
-        .select("cantidad, medicamentos(sku, descripcion, marca)")
-        .eq("id_cliente", clienteId),
-      admin
-        .from("movimientos_inventario")
-        .select(
-          "tipo, cantidad, precio_unitario, created_at, medicamentos(sku, descripcion)"
-        )
-        .eq("id_cliente", clienteId)
-        .order("created_at", { ascending: false })
-        .limit(20),
-      admin
-        .from("ventas_odv")
-        .select("sku, descripcion_producto, cantidad, precio_unitario, fecha_odv")
-        .eq("id_cliente", clienteId)
-        .order("fecha_odv", { ascending: false })
-        .limit(20),
-      admin
-        .from("botiquin_odv")
-        .select("sku, descripcion_producto, cantidad, fecha_odv")
-        .eq("id_cliente", clienteId)
-        .order("fecha_odv", { ascending: false })
-        .limit(10),
-      chatbot.rpc("clasificacion_por_cliente", {
-        p_id_cliente: clienteId,
-      }),
-      admin
-        .from("botiquin_clientes_sku_disponibles")
-        .select("sku, fecha_ingreso")
-        .eq("id_cliente", clienteId),
-    ]);
-
-  const cliente = clienteRes.data;
-  if (!cliente) return null;
-
-  const parts: string[] = [];
-  parts.push(`MEDICO: ${cliente.nombre_cliente} (ID: ${cliente.id_cliente})`);
-
-  // Inventario
-  const inv = invRes.data ?? [];
-  if (inv.length > 0) {
-    parts.push(`\nINVENTARIO BOTIQUIN ACTUAL (${inv.length} SKUs):`);
-    for (const item of inv) {
-      const med = item.medicamentos as {
-        sku: string;
-        descripcion: string;
-        marca: string;
-      } | null;
-      parts.push(
-        `- ${med?.sku ?? "?"}: ${med?.descripcion ?? "?"} (${med?.marca ?? "?"}) x${item.cantidad}`
-      );
-    }
-  }
-
-  // SKUs disponibles
-  const skuDisp = skuDispRes.data ?? [];
-  if (skuDisp.length > 0) {
-    parts.push(
-      `\nSKUs DISPONIBLES PARA BOTIQUIN: ${skuDisp.map((s: { sku: string }) => s.sku).join(", ")}`
-    );
-  }
-
-  // Movimientos
-  const mov = movRes.data ?? [];
-  if (mov.length > 0) {
-    parts.push(`\nULTIMOS MOVIMIENTOS (${mov.length}):`);
-    for (const m of mov) {
-      const med = m.medicamentos as {
-        sku: string;
-        descripcion: string;
-      } | null;
-      parts.push(
-        `- ${m.tipo}: ${med?.sku ?? "?"} x${m.cantidad} @ $${m.precio_unitario} (${m.created_at?.substring(0, 10)})`
-      );
-    }
-  }
-
-  // Ventas ODV
-  const odv = odvRes.data ?? [];
-  if (odv.length > 0) {
-    parts.push(`\nVENTAS ODV RECIENTES (${odv.length}):`);
-    for (const v of odv) {
-      parts.push(
-        `- ${v.sku}: ${v.descripcion_producto} x${v.cantidad} @ $${v.precio_unitario} (${v.fecha_odv})`
-      );
-    }
-  }
-
-  // Botiquin ODV
-  const bot = botOdvRes.data ?? [];
-  if (bot.length > 0) {
-    parts.push(`\nORDENES BOTIQUIN ODV (${bot.length}):`);
-    for (const b of bot) {
-      parts.push(
-        `- ${b.sku}: ${b.descripcion_producto} x${b.cantidad} (${b.fecha_odv})`
-      );
-    }
-  }
-
-  // Clasificación M1/M2/M3
-  const clas = clasRes.data ?? [];
-  if (clas.length > 0) {
-    parts.push(`\nCLASIFICACION M1/M2/M3:`);
-    for (const c of clas as Array<{ sku: string; clasificacion: string }>) {
-      parts.push(`- ${c.sku}: ${c.clasificacion}`);
-    }
-  }
-
-  return parts.join("\n");
-}
-
-// ============================================================================
-// RAG: Recolecciones Context
-// ============================================================================
-
-async function getRecoleccionesContext(
-  user: UserInfo,
-  clienteId?: string
-): Promise<string> {
-  const { data, error } = await chatbot.rpc("get_recolecciones_usuario", {
-    p_id_usuario: user.id_usuario,
-    p_id_cliente: clienteId ?? null,
-    p_limit: 20,
-  });
-
-  if (error || !data || data.length === 0) return "";
-
-  const lines = data.map(
-    (r: {
-      nombre_cliente: string;
-      estado: string;
-      created_at: string;
-      cedis_observaciones: string;
-      items: Array<{ sku: string; cantidad: number; producto: string }>;
-    }) => {
-      const date = r.created_at?.substring(0, 10) ?? "?";
-      const itemStr =
-        r.items
-          ?.map(
-            (i: { sku: string; cantidad: number }) =>
-              `${i.sku} x${i.cantidad}`
-          )
-          .join(", ") ?? "Sin items";
-      const obs = r.cedis_observaciones
-        ? ` | Obs: ${r.cedis_observaciones}`
-        : "";
-      return `- ${date} | ${r.nombre_cliente} | ${r.estado} | ${itemStr}${obs}`;
-    }
-  );
-
-  return `RECOLECCIONES (${data.length}):\n${lines.join("\n")}`;
-}
-
-// ============================================================================
-// RAG: Auditoría Context
-// ============================================================================
-
-async function getAuditoriaContext(
-  clienteId: string,
-  user: UserInfo
-): Promise<string | null> {
-  const { isAdmin, userId } = getUserFilter(user);
-
-  if (!isAdmin) {
-    const { data: cliente } = await admin
-      .from("clientes")
-      .select("id_usuario")
-      .eq("id_cliente", clienteId)
-      .single();
-
-    if (!cliente || cliente.id_usuario !== userId) return null;
-  }
-
-  const { data, error } = await admin.rpc("get_auditoria_cliente", {
-    p_cliente: clienteId,
-  });
-
-  if (error || !data) return null;
-
-  const result = data as Record<string, unknown>;
-  const parts: string[] = [`AUDITORIA DE CLIENTE ${clienteId}:`];
-
-  if (result.resumen) {
-    parts.push(`Resumen: ${JSON.stringify(result.resumen)}`);
-  }
-  if (result.ciclo_vida_skus) {
-    const ciclo = result.ciclo_vida_skus as Array<Record<string, unknown>>;
-    parts.push(
-      `Ciclo de vida SKUs (${ciclo.length}): ${JSON.stringify(ciclo.slice(0, 10))}`
-    );
-  }
-  if (result.anomalias) {
-    const anomalias = result.anomalias as Array<Record<string, unknown>>;
-    if (anomalias.length > 0) {
-      parts.push(
-        `Anomalias (${anomalias.length}): ${JSON.stringify(anomalias)}`
-      );
-    }
-  }
-
-  return parts.join("\n");
-}
-
-// ============================================================================
-// Fuzzy Matching
-// ============================================================================
-
-async function resolveClienteByName(
+async function executeTool(
   name: string,
+  args: Record<string, unknown>,
   user: UserInfo
-): Promise<string | null> {
+): Promise<string> {
   const { isAdmin, userId } = getUserFilter(user);
 
-  const { data } = await chatbot.rpc("fuzzy_search_clientes", {
-    p_search: name,
-    p_id_usuario: isAdmin ? null : userId,
-    p_limit: 1,
-  });
-
-  return data?.[0]?.id_cliente ?? null;
-}
-
-// ============================================================================
-// Intent Detection
-// ============================================================================
-
-function detectIntent(message: string): {
-  needsRecolecciones: boolean;
-  needsAuditoria: boolean;
-  mentionedNames: string[];
-} {
-  const lower = message.toLowerCase();
-  const needsRecolecciones =
-    /recolec|recog|devol|entreg.*cedis/.test(lower);
-  const needsAuditoria =
-    /auditor|historial completo|trazab|grafo|ciclo de vida/.test(lower);
-
-  // Extract potential doctor/client names
-  const namePatterns = [
-    /(?:dr\.?\s+|doctor(?:a)?\s+|medico\s+|dra\.?\s+)([\w\sáéíóúñÁÉÍÓÚÑ]+?)(?:\s*[?,.]|$)/gi,
-  ];
-  const mentionedNames: string[] = [];
-  for (const pat of namePatterns) {
-    let match;
-    while ((match = pat.exec(message)) !== null) {
-      const name = match[1].trim();
-      if (name.length > 2) mentionedNames.push(name);
-    }
-  }
-
-  return { needsRecolecciones, needsAuditoria, mentionedNames };
-}
-
-// ============================================================================
-// Build Full RAG Context
-// ============================================================================
-
-async function buildRAGContext(
-  userMessage: string,
-  user: UserInfo,
-  clienteId?: string
-): Promise<string> {
-  const parts: string[] = [];
-
-  // User identity
-  parts.push(
-    `USUARIO ACTUAL: id_usuario=${user.id_usuario}, rol=${user.rol}`
-  );
-
-  const intent = detectIntent(userMessage);
-
-  // Resolve mentioned doctor name to client ID
-  let resolvedClienteId = clienteId;
-  if (!resolvedClienteId && intent.mentionedNames.length > 0) {
-    resolvedClienteId =
-      (await resolveClienteByName(intent.mentionedNames[0], user)) ??
-      undefined;
-  }
-
-  // Parallel context fetching
-  const contextPromises: Promise<string | null>[] = [];
-
-  // 1. Semantic search for medicamentos + fichas
-  let queryEmbedding: number[] | null = null;
   try {
-    queryEmbedding = await generateEmbedding(userMessage, "RETRIEVAL_QUERY");
+    switch (name) {
+      case "search_medicamentos": {
+        const query = args.query as string;
+        const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
+        const { data, error } = await chatbot.rpc("match_medicamentos", {
+          query_embedding: JSON.stringify(embedding),
+          match_threshold: 0.55,
+          match_count: 10,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No se encontraron medicamentos relevantes.";
+        return (data as AnyRow[])
+          .map(
+            (m) =>
+              `${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | Padecimientos: ${m.padecimientos || "N/A"}`
+          )
+          .join("\n");
+      }
+
+      case "search_fichas_tecnicas": {
+        const query = args.query as string;
+        const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
+        const { data, error } = await chatbot.rpc("match_fichas", {
+          query_embedding: JSON.stringify(embedding),
+          match_threshold: 0.60,
+          match_count: 3,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No se encontro informacion tecnica relevante.";
+        return (data as AnyRow[])
+          .map((f) => `[${f.sku}]:\n${f.content}`)
+          .join("\n\n");
+      }
+
+      case "search_clientes": {
+        const nombre = args.nombre as string;
+        const { data, error } = await chatbot.rpc("fuzzy_search_clientes", {
+          p_search: nombre,
+          p_id_usuario: isAdmin ? null : userId,
+          p_limit: 5,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No se encontraron medicos con ese nombre.";
+        return (data as AnyRow[])
+          .map(
+            (c) =>
+              `id_cliente: ${c.id_cliente} | Nombre: ${c.nombre} | Similitud: ${(c.similarity * 100).toFixed(0)}%`
+          )
+          .join("\n");
+      }
+
+      case "get_inventario_doctor": {
+        const idCliente = args.id_cliente as string;
+        const { data, error } = await chatbot.rpc("get_inventario_doctor", {
+          p_id_cliente: idCliente,
+          p_id_usuario: userId,
+          p_is_admin: isAdmin,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "El medico no tiene inventario en botiquin actualmente.";
+        return (data as AnyRow[])
+          .map(
+            (item) =>
+              `${item.sku}: ${item.descripcion} (${item.marca}) | Cant: ${item.cantidad_disponible} | $${item.precio} | ${item.contenido ?? ""}`
+          )
+          .join("\n");
+      }
+
+      case "get_movimientos_doctor": {
+        const idCliente = args.id_cliente as string;
+        const fuente = (args.fuente as string) ?? "ambos";
+        const limite = (args.limite as number) ?? 30;
+        const { data, error } = await chatbot.rpc("get_movimientos_doctor", {
+          p_id_cliente: idCliente,
+          p_id_usuario: userId,
+          p_is_admin: isAdmin,
+          p_fuente: fuente,
+          p_limite: limite,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No se encontraron movimientos para este medico.";
+        return (data as AnyRow[])
+          .map(
+            (m) =>
+              `[${m.fuente}] ${m.fecha?.substring(0, 10) ?? "?"} | ${m.tipo}: ${m.sku} - ${m.descripcion} (${m.marca}) x${m.cantidad} @ $${m.precio ?? 0}`
+          )
+          .join("\n");
+      }
+
+      case "get_clasificacion_cliente": {
+        const idCliente = args.id_cliente as string;
+        const { data, error } = await chatbot.rpc(
+          "clasificacion_por_cliente",
+          { p_id_cliente: idCliente }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No hay clasificacion disponible para este medico.";
+        return (data as AnyRow[])
+          .map((c) => `${c.sku}: ${c.clasificacion}`)
+          .join("\n");
+      }
+
+      case "get_ventas_odv_usuario": {
+        const skuFilter = (args.sku_filter as string) ?? null;
+        const limite = (args.limite as number) ?? 50;
+        const { data, error } = await chatbot.rpc("get_ventas_odv_usuario", {
+          p_id_usuario: userId,
+          p_is_admin: isAdmin,
+          p_sku_filter: skuFilter,
+          p_limite: limite,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No se encontraron ventas ODV.";
+        return (data as AnyRow[])
+          .map(
+            (v) =>
+              `${v.fecha} | ${v.nombre_cliente} | ${v.sku}: ${v.descripcion} (${v.marca}) x${v.cantidad} @ $${v.precio}`
+          )
+          .join("\n");
+      }
+
+      case "get_recolecciones": {
+        const idCliente = (args.id_cliente as string) ?? null;
+        const { data, error } = await chatbot.rpc(
+          "get_recolecciones_usuario",
+          {
+            p_id_usuario: userId,
+            p_id_cliente: idCliente,
+            p_limit: 20,
+          }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No se encontraron recolecciones.";
+        return (data as AnyRow[])
+          .map((r) => {
+            const items =
+              r.items
+                ?.map(
+                  (i: { sku: string; cantidad: number }) =>
+                    `${i.sku} x${i.cantidad}`
+                )
+                .join(", ") ?? "Sin items";
+            const obs = r.cedis_observaciones
+              ? ` | Obs: ${r.cedis_observaciones}`
+              : "";
+            return `${r.created_at?.substring(0, 10)} | ${r.nombre_cliente} | ${r.estado} | ${items}${obs}`;
+          })
+          .join("\n");
+      }
+
+      case "get_estadisticas_corte": {
+        const { data, error } = await admin.rpc(
+          "get_corte_stats_generales_con_comparacion"
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data) return "No hay estadisticas del corte actual.";
+        const row = Array.isArray(data) ? data[0] : data;
+        if (!row) return "No hay estadisticas del corte actual.";
+        return JSON.stringify(row, null, 2);
+      }
+
+      case "get_estadisticas_por_medico": {
+        const [statsResult, clientsResult] = await Promise.all([
+          admin.rpc("get_corte_stats_por_medico_con_comparacion"),
+          isAdmin
+            ? Promise.resolve({ data: null })
+            : admin
+                .from("clientes")
+                .select("id_cliente")
+                .eq("id_usuario", userId),
+        ]);
+        if (statsResult.error) return `Error: ${statsResult.error.message}`;
+        if (!statsResult.data?.length) return "No hay estadisticas por medico.";
+
+        let filtered = statsResult.data as AnyRow[];
+        if (!isAdmin && clientsResult.data) {
+          const clientIds = new Set(
+            (clientsResult.data as AnyRow[]).map((c) => c.id_cliente)
+          );
+          filtered = filtered.filter((m) =>
+            m.id_cliente ? clientIds.has(m.id_cliente) : true
+          );
+        }
+
+        if (!filtered.length)
+          return "No hay estadisticas para tus medicos en el corte actual.";
+        const limited = filtered.slice(0, 30);
+        return (
+          `Estadisticas por medico (${filtered.length} total, mostrando ${limited.length}):\n` +
+          limited.map((m) => JSON.stringify(m)).join("\n")
+        );
+      }
+
+      case "get_ranking_productos": {
+        const limite = (args.limite as number) ?? 20;
+        const { data, error } = await admin.rpc("get_product_interest", {
+          p_limit: limite,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No hay datos de ranking de productos.";
+        return (data as AnyRow[])
+          .map((p) => JSON.stringify(p))
+          .join("\n");
+      }
+
+      case "get_rendimiento_marcas": {
+        const { data, error } = await admin.rpc("get_brand_performance");
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No hay datos de rendimiento por marca.";
+        return (data as AnyRow[])
+          .map((b) => JSON.stringify(b))
+          .join("\n");
+      }
+
+      case "get_precios_medicamentos": {
+        const busqueda = args.busqueda as string;
+        const marca = (args.marca as string) ?? null;
+        const { data, error } = await chatbot.rpc("get_precios_medicamentos", {
+          p_busqueda: busqueda,
+          p_marca_filter: marca,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No se encontraron medicamentos con ese criterio.";
+        return (data as AnyRow[])
+          .map(
+            (m) =>
+              `${m.sku}: ${m.descripcion} (${m.marca}) | $${m.precio} | ${m.contenido ?? ""} | Actualizado: ${m.ultima_actualizacion?.substring(0, 10) ?? "N/A"}`
+          )
+          .join("\n");
+      }
+
+      default:
+        return `Herramienta desconocida: ${name}`;
+    }
   } catch (e) {
-    console.warn("Embedding generation failed, using fallback:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Tool execution error (${name}):`, msg);
+    return `Error al ejecutar herramienta: ${msg}`;
   }
-
-  if (queryEmbedding) {
-    contextPromises.push(getRelevantMedicamentos(queryEmbedding));
-    contextPromises.push(getRelevantFichas(queryEmbedding));
-  } else {
-    contextPromises.push(getFallbackCatalog());
-    contextPromises.push(Promise.resolve(""));
-  }
-
-  // 2. Client context
-  if (resolvedClienteId) {
-    contextPromises.push(getClientContext(resolvedClienteId, user));
-  } else {
-    contextPromises.push(Promise.resolve(null));
-  }
-
-  // 3. Recolecciones
-  if (intent.needsRecolecciones) {
-    contextPromises.push(
-      getRecoleccionesContext(user, resolvedClienteId)
-    );
-  } else {
-    contextPromises.push(Promise.resolve(""));
-  }
-
-  // 4. Auditoría
-  if (intent.needsAuditoria && resolvedClienteId) {
-    contextPromises.push(getAuditoriaContext(resolvedClienteId, user));
-  } else {
-    contextPromises.push(Promise.resolve(null));
-  }
-
-  const [medsCtx, fichasCtx, clientCtx, recoCtx, auditCtx] =
-    await Promise.all(contextPromises);
-
-  if (medsCtx) parts.push(medsCtx);
-  if (fichasCtx) parts.push(fichasCtx);
-  if (clientCtx) parts.push(clientCtx);
-  if (recoCtx) parts.push(recoCtx);
-  if (auditCtx) parts.push(auditCtx);
-
-  return parts.join("\n\n");
 }
 
 // ============================================================================
@@ -728,7 +795,7 @@ async function compactConversation(
   try {
     const prompt =
       "Resume esta conversacion en maximo 200 palabras conservando datos clave, nombres de productos y cifras. Responde SOLO con el resumen.";
-    const contents = messages.map((m) => ({
+    const contents: GeminiContent[] = messages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }));
@@ -750,11 +817,8 @@ function buildGeminiHistory(
     messages: Array<{ role: string; content: string }>;
   },
   currentMessage: string
-): Array<{ role: string; parts: Array<{ text: string }> }> {
-  let historyContents: Array<{
-    role: string;
-    parts: Array<{ text: string }>;
-  }> = [];
+): GeminiContent[] {
+  let historyContents: GeminiContent[] = [];
 
   if (history.summary && history.messages.length > 4) {
     historyContents.push({
@@ -790,16 +854,18 @@ function buildGeminiHistory(
   }
 
   // Merge consecutive same-role messages
-  const merged: typeof historyContents = [];
+  const merged: GeminiContent[] = [];
   for (const msg of historyContents) {
     if (
       merged.length > 0 &&
       merged[merged.length - 1].role === msg.role
     ) {
-      merged[merged.length - 1].parts[0].text +=
-        "\n" + msg.parts[0].text;
+      const lastPart = merged[merged.length - 1].parts[0];
+      if (lastPart.text && msg.parts[0].text) {
+        lastPart.text += "\n" + msg.parts[0].text;
+      }
     } else {
-      merged.push({ ...msg });
+      merged.push({ role: msg.role, parts: [...msg.parts] });
     }
   }
 
@@ -1043,30 +1109,24 @@ async function handleSendMessage(
       conversationId = newConv.id;
     }
 
-    // 3. Build context in parallel
-    const [systemPrompt, ragContext, prevSummaries, history] =
-      await Promise.all([
-        getSystemPrompt(),
-        buildRAGContext(
-          body.message,
-          user,
-          body.context_cliente_id || undefined
-        ),
-        getPreviousSummaries(user.id_usuario, conversationId),
-        getConversationHistory(conversationId),
-      ]);
+    // 3. Build context — NO RAG pre-loading, just system prompt + history
+    const [systemPrompt, prevSummaries, history] = await Promise.all([
+      getSystemPrompt(),
+      getPreviousSummaries(user.id_usuario, conversationId),
+      getConversationHistory(conversationId),
+    ]);
 
-    // 4. Build Gemini contents
+    // 4. Build Gemini contents from history + current message
     const mergedContents = buildGeminiHistory(history, body.message);
 
+    // System prompt with user identity (tools provide data on-demand)
     const fullSystemPrompt = [
       systemPrompt,
-      "\n\n--- CONTEXTO DE DATOS ---\n",
-      ragContext,
+      `\nUSUARIO: id_usuario=${user.id_usuario}, rol=${user.rol}`,
       prevSummaries ? `\n\n${prevSummaries}` : "",
     ].join("");
 
-    // 5. Stream or non-stream
+    // 5. Stream or non-stream (pass user for tool execution)
     if (useStreaming) {
       return handleStreamingResponse(
         req,
@@ -1077,7 +1137,8 @@ async function handleSendMessage(
         body.context_cliente_id || null,
         usage,
         history,
-        startTime
+        startTime,
+        user
       );
     } else {
       return handleNonStreamingResponse(
@@ -1088,7 +1149,8 @@ async function handleSendMessage(
         body.context_cliente_id || null,
         usage,
         history,
-        startTime
+        startTime,
+        user
       );
     }
   } catch (error) {
@@ -1111,13 +1173,13 @@ async function handleSendMessage(
 }
 
 // ============================================================================
-// Streaming Response
+// Streaming Response with Function Calling
 // ============================================================================
 
 async function handleStreamingResponse(
   req: Request,
   systemPrompt: string,
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>,
+  contents: GeminiContent[],
   conversationId: string,
   userMessage: string,
   clienteId: string | null,
@@ -1126,87 +1188,148 @@ async function handleStreamingResponse(
     summary: string | null;
     messages: Array<{ role: string; content: string }>;
   },
-  startTime: number
+  startTime: number,
+  user: UserInfo
 ): Promise<Response> {
-  const token = await getAccessToken();
-  const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:streamGenerateContent?alt=sse`;
-
-  const geminiRes = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
-    }),
-  });
-
-  if (!geminiRes.ok) {
-    const err = await geminiRes.text();
-    throw new Error(`Gemini streaming error (${geminiRes.status}): ${err}`);
-  }
-
-  let fullText = "";
-  let tokensInput = 0;
-  let tokensOutput = 0;
-
   const encoder = new TextEncoder();
-  const reader = geminiRes.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        while (true) {
-          if (req.signal.aborted) {
-            console.warn("Client disconnected during stream");
-            break;
+        // Mutable copy of contents for tool calling loop
+        const mutableContents = [...contents];
+        let fullText = "";
+        let tokensInput = 0;
+        let tokensOutput = 0;
+
+        // Function calling loop: max MAX_TOOL_ITERATIONS rounds
+        for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+          if (req.signal.aborted) break;
+
+          const token = await getAccessToken();
+          const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:streamGenerateContent?alt=sse`;
+
+          const geminiRes = await fetch(url, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              contents: mutableContents,
+              ...TOOL_DECLARATIONS,
+              generationConfig: {
+                maxOutputTokens: 1024,
+                temperature: 0.3,
+              },
+            }),
+          });
+
+          if (!geminiRes.ok) {
+            const err = await geminiRes.text();
+            throw new Error(
+              `Gemini streaming error (${geminiRes.status}): ${err}`
+            );
           }
 
-          const { done, value } = await reader.read();
-          if (done) break;
+          const reader = geminiRes.body!.getReader();
+          currentReader = reader;
+          const decoder = new TextDecoder();
+          let buffer = "";
+          const functionCalls: Array<{
+            name: string;
+            args: Record<string, unknown>;
+          }> = [];
 
-          buffer += decoder.decode(value, { stream: true });
+          // Read the streaming response
+          while (true) {
+            if (req.signal.aborted) {
+              console.warn("Client disconnected during stream");
+              break;
+            }
 
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+            const { done, value } = await reader.read();
+            if (done) break;
 
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr || jsonStr === "[DONE]") continue;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
 
-            try {
-              const chunk: GeminiSSEChunk = JSON.parse(jsonStr);
-              const text =
-                chunk.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr || jsonStr === "[DONE]") continue;
 
-              if (text) {
-                fullText += text;
-                controller.enqueue(
-                  encoder.encode(
-                    `data: ${JSON.stringify({ t: text, d: false })}\n\n`
-                  )
-                );
+              try {
+                const chunk: GeminiSSEChunk = JSON.parse(jsonStr);
+                const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+
+                for (const part of parts) {
+                  if (part.text) {
+                    fullText += part.text;
+                    // Stream text to client immediately
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
+                      )
+                    );
+                  }
+                  if (part.functionCall) {
+                    functionCalls.push({
+                      name: part.functionCall.name,
+                      args: part.functionCall.args ?? {},
+                    });
+                  }
+                }
+
+                if (chunk.usageMetadata) {
+                  tokensInput =
+                    chunk.usageMetadata.promptTokenCount ?? tokensInput;
+                  tokensOutput =
+                    chunk.usageMetadata.candidatesTokenCount ?? tokensOutput;
+                }
+              } catch {
+                // Skip unparseable chunks
               }
-
-              if (chunk.usageMetadata) {
-                tokensInput =
-                  chunk.usageMetadata.promptTokenCount ?? tokensInput;
-                tokensOutput =
-                  chunk.usageMetadata.candidatesTokenCount ?? tokensOutput;
-              }
-            } catch {
-              // Skip unparseable chunks
             }
           }
+
+          currentReader = null;
+
+          // If function calls detected, execute tools and continue loop
+          if (functionCalls.length > 0) {
+            const results = await Promise.all(
+              functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
+            );
+
+            // Add model's function call turn
+            mutableContents.push({
+              role: "model",
+              parts: functionCalls.map((fc) => ({
+                functionCall: { name: fc.name, args: fc.args },
+              })),
+            });
+
+            // Add function responses
+            mutableContents.push({
+              role: "user",
+              parts: functionCalls.map((fc, i) => ({
+                functionResponse: {
+                  name: fc.name,
+                  response: { result: truncateResult(results[i]) },
+                },
+              })),
+            });
+
+            continue; // Next iteration — Gemini will process tool results
+          }
+
+          break; // Text response, done
         }
 
-        // Store messages
+        // Store messages in DB
         const latencyMs = Date.now() - startTime;
         const insertResult = await chatbot
           .from("messages")
@@ -1283,7 +1406,7 @@ async function handleStreamingResponse(
       }
     },
     cancel() {
-      reader.cancel();
+      currentReader?.cancel();
     },
   });
 
@@ -1298,12 +1421,12 @@ async function handleStreamingResponse(
 }
 
 // ============================================================================
-// Non-Streaming Response (backward compat)
+// Non-Streaming Response with Function Calling (backward compat)
 // ============================================================================
 
 async function handleNonStreamingResponse(
   systemPrompt: string,
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>,
+  contents: GeminiContent[],
   conversationId: string,
   userMessage: string,
   clienteId: string | null,
@@ -1312,9 +1435,78 @@ async function handleNonStreamingResponse(
     summary: string | null;
     messages: Array<{ role: string; content: string }>;
   },
-  startTime: number
+  startTime: number,
+  user: UserInfo
 ): Promise<Response> {
-  const geminiResult = await callGemini(systemPrompt, contents);
+  const mutableContents = [...contents];
+  let finalText = "";
+  let tokensInput = 0;
+  let tokensOutput = 0;
+
+  // Function calling loop
+  for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    const token = await getAccessToken();
+    const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:generateContent`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: mutableContents,
+        ...TOOL_DECLARATIONS,
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `Gemini API error (${res.status}): ${await res.text()}`
+      );
+    }
+
+    const data = await res.json();
+    tokensInput += data.usageMetadata?.promptTokenCount ?? 0;
+    tokensOutput += data.usageMetadata?.candidatesTokenCount ?? 0;
+
+    const parts: GeminiPart[] =
+      data.candidates?.[0]?.content?.parts ?? [];
+    const functionCalls = parts
+      .filter((p) => p.functionCall)
+      .map((p) => p.functionCall!);
+
+    if (functionCalls.length > 0) {
+      const results = await Promise.all(
+        functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
+      );
+
+      mutableContents.push({
+        role: "model",
+        parts: functionCalls.map((fc) => ({
+          functionCall: { name: fc.name, args: fc.args },
+        })),
+      });
+
+      mutableContents.push({
+        role: "user",
+        parts: functionCalls.map((fc, i) => ({
+          functionResponse: {
+            name: fc.name,
+            response: { result: truncateResult(results[i]) },
+          },
+        })),
+      });
+
+      continue;
+    }
+
+    finalText = parts.find((p) => p.text)?.text ?? "";
+    break;
+  }
+
   const latencyMs = Date.now() - startTime;
 
   const { data: insertedMsgs } = await chatbot
@@ -1329,10 +1521,10 @@ async function handleNonStreamingResponse(
       {
         conversation_id: conversationId,
         role: "assistant",
-        content: geminiResult.text,
+        content: finalText,
         context_cliente_id: clienteId,
-        tokens_input: geminiResult.tokensInput,
-        tokens_output: geminiResult.tokensOutput,
+        tokens_input: tokensInput,
+        tokens_output: tokensOutput,
         latency_ms: latencyMs,
       },
     ])
@@ -1352,13 +1544,13 @@ async function handleNonStreamingResponse(
     const allMsgs = [
       ...history.messages,
       { role: "user", content: userMessage },
-      { role: "assistant", content: geminiResult.text },
+      { role: "assistant", content: finalText },
     ];
     compactConversation(conversationId, allMsgs).catch(() => {});
   }
 
   return jsonResponse({
-    message: geminiResult.text,
+    message: finalText,
     conversation_id: conversationId,
     message_id: assistantMsgId,
     remaining_queries: Math.max((usage.remaining ?? 1) - 1, 0),
