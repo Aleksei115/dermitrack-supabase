@@ -1275,11 +1275,18 @@ async function handleStreamingResponse(
                   allModelParts.push(part);
 
                   if (part.text && !part.thought) {
-                    // Only stream non-thought text to client
+                    // Stream non-thought text to client
                     fullText += part.text;
                     controller.enqueue(
                       encoder.encode(
                         `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
+                      )
+                    );
+                  } else if (part.thought) {
+                    // Send keepalive during thinking to reset client timeout
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({ t: "", d: false })}\n\n`
                       )
                     );
                   }
@@ -1307,6 +1314,13 @@ async function handleStreamingResponse(
 
           // If function calls detected, execute tools and continue loop
           if (functionCalls.length > 0) {
+            // Keepalive before tool execution to reset client timeout
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ t: "", d: false })}\n\n`
+              )
+            );
+
             const results = await Promise.all(
               functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
             );
