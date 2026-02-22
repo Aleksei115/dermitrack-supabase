@@ -76,7 +76,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const chatbot = admin.schema("chatbot");
 
 // ============================================================================
-// Tool Declarations — 13 tools for Gemini function calling
+// Tool Declarations — 17 tools for Gemini function calling
 // ============================================================================
 
 const TOOL_DECLARATIONS = {
@@ -246,13 +246,23 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_ranking_productos",
           description:
-            "Obtiene ranking de productos por interes/movimiento: ventas, creaciones, recolecciones, stock activo. Para saber que SKU se vende o se mueve mas.",
+            "Obtiene ranking de productos por interes/movimiento: ventas, creaciones, recolecciones, stock activo. Sin fechas devuelve datos de toda la historia. Con fechas filtra el periodo.",
           parameters: {
             type: "object",
             properties: {
               limite: {
                 type: "integer",
                 description: "Numero maximo de productos (default 20)",
+              },
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
               },
             },
             required: [],
@@ -261,10 +271,105 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_rendimiento_marcas",
           description:
-            "Obtiene rendimiento por marca: ingresos, piezas vendidas. Para comparar marcas y ver cual genera mas ingresos.",
+            "Obtiene rendimiento por marca: ingresos, piezas vendidas. Sin fechas devuelve datos de toda la historia. Con fechas filtra el periodo.",
           parameters: {
             type: "object",
-            properties: {},
+            properties: {
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_datos_historicos",
+          description:
+            "Obtiene datos historicos completos: KPIs globales (ventas M1, creaciones, stock activo, recolecciones) y datos detallados por visita. Sin fechas devuelve TODO el historico. Ideal para preguntas como 'quien ha vendido mas en toda la historia'.",
+          parameters: {
+            type: "object",
+            properties: {
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_facturacion_medicos",
+          description:
+            "Obtiene la facturacion y composicion de ventas POR MEDICO: rango (Diamante, Oro, Plata, Bronce), facturacion actual vs baseline, desglose M1/M2/M3, porcentaje de crecimiento. Ideal para ranking de medicos y analisis de cartera.",
+          parameters: {
+            type: "object",
+            properties: {
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_rendimiento_por_padecimiento",
+          description:
+            "Obtiene rendimiento por padecimiento/condicion medica: valor total e ingresos, piezas vendidas. Para saber que padecimientos generan mas ingresos.",
+          parameters: {
+            type: "object",
+            properties: {
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: "get_impacto_botiquin",
+          description:
+            "Obtiene metricas de impacto del botiquin: adopciones (M1→ODV), conversiones (M2), exposiciones (M3), revenue por categoria, porcentaje del revenue total atribuible al botiquin.",
+          parameters: {
+            type: "object",
+            properties: {
+              fecha_inicio: {
+                type: "string",
+                description:
+                  "Fecha inicio del periodo en formato YYYY-MM-DD (opcional, sin fecha = toda la historia)",
+              },
+              fecha_fin: {
+                type: "string",
+                description:
+                  "Fecha fin del periodo en formato YYYY-MM-DD (opcional)",
+              },
+            },
             required: [],
           },
         },
@@ -695,8 +800,12 @@ async function executeTool(
 
       case "get_ranking_productos": {
         const limite = (args.limite as number) ?? 20;
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
         const { data, error } = await admin.rpc("get_product_interest", {
           p_limit: limite,
+          p_fecha_inicio: fechaInicio,
+          p_fecha_fin: fechaFin,
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de ranking de productos.";
@@ -706,12 +815,116 @@ async function executeTool(
       }
 
       case "get_rendimiento_marcas": {
-        const { data, error } = await admin.rpc("get_brand_performance");
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
+        const { data, error } = await admin.rpc("get_brand_performance", {
+          p_fecha_inicio: fechaInicio,
+          p_fecha_fin: fechaFin,
+        });
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de rendimiento por marca.";
         return (data as AnyRow[])
           .map((b) => JSON.stringify(b))
           .join("\n");
+      }
+
+      case "get_datos_historicos": {
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
+        const { data, error } = await admin.rpc("get_corte_historico_data", {
+          p_fecha_inicio: fechaInicio,
+          p_fecha_fin: fechaFin,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data) return "No hay datos historicos disponibles.";
+        return truncateResult(JSON.stringify(data, null, 2));
+      }
+
+      case "get_facturacion_medicos": {
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
+        const [facResult, clientsResult] = await Promise.all([
+          admin.rpc("get_facturacion_composicion", {
+            p_fecha_inicio: fechaInicio,
+            p_fecha_fin: fechaFin,
+          }),
+          isAdmin
+            ? Promise.resolve({ data: null })
+            : admin
+                .from("clientes")
+                .select("id_cliente")
+                .eq("id_usuario", userId),
+        ]);
+        if (facResult.error) return `Error: ${facResult.error.message}`;
+        if (!facResult.data?.length)
+          return "No hay datos de facturacion por medico.";
+        let filtered = facResult.data as AnyRow[];
+        if (!isAdmin && clientsResult.data) {
+          const clientIds = new Set(
+            (clientsResult.data as AnyRow[]).map((c) => c.id_cliente)
+          );
+          filtered = filtered.filter((m) =>
+            m.id_cliente ? clientIds.has(m.id_cliente) : true
+          );
+        }
+        if (!filtered.length)
+          return "No hay datos de facturacion para tus medicos.";
+        const limited = filtered.slice(0, 30);
+        return (
+          `Facturacion por medico (${filtered.length} total, mostrando ${limited.length}):\n` +
+          limited
+            .map(
+              (m) =>
+                `${m.nombre_cliente} | Rango: ${m.rango_actual ?? "N/A"} | Fact: $${m.facturacion_actual ?? 0} | Baseline: $${m.baseline ?? 0} | M1: $${m.current_m1 ?? 0} | M2: $${m.current_m2 ?? 0} | M3: $${m.current_m3 ?? 0} | Crec: ${m.pct_crecimiento ?? 0}%`
+            )
+            .join("\n")
+        );
+      }
+
+      case "get_rendimiento_por_padecimiento": {
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
+        const { data, error } = await admin.rpc(
+          "get_padecimiento_performance",
+          {
+            p_fecha_inicio: fechaInicio,
+            p_fecha_fin: fechaFin,
+          }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No hay datos de rendimiento por padecimiento.";
+        return (data as AnyRow[])
+          .map(
+            (p) =>
+              `${p.padecimiento}: $${p.valor} | ${p.piezas} piezas`
+          )
+          .join("\n");
+      }
+
+      case "get_impacto_botiquin": {
+        const fechaInicio = (args.fecha_inicio as string) ?? null;
+        const fechaFin = (args.fecha_fin as string) ?? null;
+        const { data, error } = await admin.rpc(
+          "get_impacto_botiquin_resumen",
+          {
+            p_fecha_inicio: fechaInicio,
+            p_fecha_fin: fechaFin,
+          }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No hay datos de impacto del botiquin.";
+        const row = (data as AnyRow[])[0];
+        return [
+          `Adopciones (M1→ODV): ${row.adopciones} | Revenue: $${row.revenue_adopciones}`,
+          `Conversiones (M2): ${row.conversiones} | Revenue: $${row.revenue_conversiones}`,
+          `Exposiciones (M3): ${row.exposiciones} | Revenue: $${row.revenue_exposiciones}`,
+          `CrossSell: ${row.crosssell_pares} pares | Revenue: $${row.revenue_crosssell}`,
+          `Revenue total impacto: $${row.revenue_total_impacto}`,
+          `Revenue total ODV: $${row.revenue_total_odv}`,
+          `% impacto botiquin: ${row.porcentaje_impacto}%`,
+        ].join("\n");
       }
 
       case "get_precios_medicamentos": {
