@@ -1403,11 +1403,10 @@ async function handleStreamingResponse(
               `data: ${JSON.stringify({ d: true, e: errMsg })}\n\n`
             )
           );
+          controller.close();
         } catch {
-          // Controller already closed
+          // Controller already closed (client disconnected)
         }
-
-        controller.close();
       }
     },
     cancel() {
