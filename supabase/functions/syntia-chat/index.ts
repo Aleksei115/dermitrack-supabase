@@ -19,6 +19,8 @@ interface UsageResult {
 
 interface GeminiPart {
   text?: string;
+  thought?: boolean;
+  thoughtSignature?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
@@ -1242,6 +1244,8 @@ async function handleStreamingResponse(
             name: string;
             args: Record<string, unknown>;
           }> = [];
+          // Preserve ALL model parts (including thought + thoughtSignature)
+          const allModelParts: GeminiPart[] = [];
 
           // Read the streaming response
           while (true) {
@@ -1267,9 +1271,12 @@ async function handleStreamingResponse(
                 const parts = chunk.candidates?.[0]?.content?.parts ?? [];
 
                 for (const part of parts) {
-                  if (part.text) {
+                  // Preserve every part for the model turn (thought signatures, etc.)
+                  allModelParts.push(part);
+
+                  if (part.text && !part.thought) {
+                    // Only stream non-thought text to client
                     fullText += part.text;
-                    // Stream text to client immediately
                     controller.enqueue(
                       encoder.encode(
                         `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
@@ -1304,12 +1311,10 @@ async function handleStreamingResponse(
               functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
             );
 
-            // Add model's function call turn
+            // Add model's turn with ALL original parts (preserves thought_signature)
             mutableContents.push({
               role: "model",
-              parts: functionCalls.map((fc) => ({
-                functionCall: { name: fc.name, args: fc.args },
-              })),
+              parts: allModelParts,
             });
 
             // Add function responses
@@ -1483,11 +1488,10 @@ async function handleNonStreamingResponse(
         functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
       );
 
+      // Use ALL original parts (preserves thought_signature)
       mutableContents.push({
         role: "model",
-        parts: functionCalls.map((fc) => ({
-          functionCall: { name: fc.name, args: fc.args },
-        })),
+        parts,
       });
 
       mutableContents.push({
@@ -1503,7 +1507,7 @@ async function handleNonStreamingResponse(
       continue;
     }
 
-    finalText = parts.find((p) => p.text)?.text ?? "";
+    finalText = parts.find((p) => p.text && !p.thought)?.text ?? "";
     break;
   }
 
