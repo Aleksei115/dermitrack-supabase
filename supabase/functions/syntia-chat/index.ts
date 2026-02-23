@@ -738,6 +738,7 @@ async function executeTool(
             p_id_usuario: userId,
             p_id_cliente: idCliente,
             p_limit: 20,
+            p_is_admin: isAdmin,
           }
         );
         if (error) return `Error: ${error.message}`;
@@ -1397,6 +1398,17 @@ async function handleStreamingResponse(
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Safe enqueue that checks for client disconnect before writing
+      const safeEnqueue = (chunk: string): boolean => {
+        if (req.signal.aborted) return false;
+        try {
+          controller.enqueue(encoder.encode(chunk));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       try {
         // Mutable copy of contents for tool calling loop
         const mutableContents = [...contents];
@@ -1476,17 +1488,13 @@ async function handleStreamingResponse(
                   if (part.text && !part.thought) {
                     // Stream non-thought text to client
                     fullText += part.text;
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
-                      )
+                    safeEnqueue(
+                      `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
                     );
                   } else if (part.thought) {
                     // Send keepalive during thinking to reset client timeout
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ t: "", d: false })}\n\n`
-                      )
+                    safeEnqueue(
+                      `data: ${JSON.stringify({ t: "", d: false })}\n\n`
                     );
                   }
                   if (part.functionCall) {
@@ -1514,15 +1522,23 @@ async function handleStreamingResponse(
           // If function calls detected, execute tools and continue loop
           if (functionCalls.length > 0) {
             // Keepalive before tool execution to reset client timeout
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ t: "", d: false })}\n\n`
-              )
+            safeEnqueue(
+              `data: ${JSON.stringify({ t: "", d: false })}\n\n`
             );
 
-            const results = await Promise.all(
-              functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
-            );
+            // Keepalive every 10s during tool execution to prevent client timeout
+            const keepaliveInterval = setInterval(() => {
+              safeEnqueue(`data: ${JSON.stringify({ t: "", d: false })}\n\n`);
+            }, 10_000);
+
+            let results: unknown[];
+            try {
+              results = await Promise.all(
+                functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
+              );
+            } finally {
+              clearInterval(keepaliveInterval);
+            }
 
             // Add model's turn with ALL original parts (preserves thought_signature)
             mutableContents.push({
@@ -1581,19 +1597,17 @@ async function handleStreamingResponse(
           .eq("id", conversationId);
 
         // Final SSE with metadata
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({
-              d: true,
-              cid: conversationId,
-              mid: assistantMsgId,
-              r: Math.max((usage.remaining ?? 1) - 1, 0),
-              l: usage.queries_limit,
-            })}\n\n`
-          )
+        safeEnqueue(
+          `data: ${JSON.stringify({
+            d: true,
+            cid: conversationId,
+            mid: assistantMsgId,
+            r: Math.max((usage.remaining ?? 1) - 1, 0),
+            l: usage.queries_limit,
+          })}\n\n`
         );
 
-        controller.close();
+        try { controller.close(); } catch { /* already closed */ }
 
         // Compaction (fire and forget)
         const totalMessages = (history.messages.length ?? 0) + 2;
@@ -1610,15 +1624,19 @@ async function handleStreamingResponse(
           e instanceof Error ? e.message : "Error al procesar";
         console.error("Streaming error:", errMsg);
 
-        try {
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ d: true, e: errMsg })}\n\n`
-            )
-          );
-          controller.close();
-        } catch {
-          // Controller already closed (client disconnected)
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ d: true, e: errMsg })}\n\n`
+              )
+            );
+            controller.close();
+          } catch {
+            // Controller already closed (client disconnected)
+          }
+        } else {
+          try { controller.close(); } catch { /* already closed */ }
         }
       }
     },
