@@ -27,6 +27,12 @@ CREATE TRIGGER trg_app_config_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION fn_app_config_updated_at();
 
+-- Ensure anon can access the public schema (required for pre-auth checks)
+GRANT USAGE ON SCHEMA public TO anon;
+
+-- Table-level grants: anon and authenticated can SELECT
+GRANT SELECT ON public.app_config TO anon, authenticated;
+
 -- RLS: anon and authenticated can read, only service_role can write
 ALTER TABLE public.app_config ENABLE ROW LEVEL SECURITY;
 
