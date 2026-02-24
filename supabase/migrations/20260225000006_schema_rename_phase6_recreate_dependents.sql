@@ -218,7 +218,7 @@ ALTER TABLE public.conditions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.medication_conditions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_reports ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.visit_odvs ENABLE ROW LEVEL SECURITY;
+-- NOTE: visit_odvs table does not exist, skipping RLS
 ALTER TABLE public.cabinet_inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cabinet_client_available_skus ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cabinet_odv ENABLE ROW LEVEL SECURITY;

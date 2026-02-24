@@ -43,7 +43,7 @@ ALTER TABLE public.recolecciones_items RENAME TO collection_items;
 ALTER TABLE public.usuarios RENAME TO users;
 ALTER TABLE public.ventas_odv RENAME TO odv_sales;
 ALTER TABLE public.visita_informes RENAME TO visit_reports;
-ALTER TABLE public.visita_odvs RENAME TO visit_odvs;
+-- NOTE: visita_odvs table does not exist in the database, skipping
 ALTER TABLE public.visitas RENAME TO visits;
 ALTER TABLE public.zonas RENAME TO zones;
 
@@ -190,10 +190,7 @@ ALTER TABLE public.users RENAME COLUMN id_usuario TO user_id;
 ALTER TABLE public.users RENAME COLUMN nombre TO name;
 ALTER TABLE public.users RENAME COLUMN rol TO role;
 
--- Table: visit_odvs
-ALTER TABLE public.visit_odvs RENAME COLUMN fecha_odv TO odv_date;
-ALTER TABLE public.visit_odvs RENAME COLUMN tipo TO type;
-ALTER TABLE public.visit_odvs RENAME COLUMN total_piezas TO total_pieces;
+-- NOTE: visit_odvs table does not exist, column renames skipped
 
 -- Table: visit_reports
 ALTER TABLE public.visit_reports RENAME COLUMN completada TO completed;
