@@ -1416,6 +1416,7 @@ async function handleStreamingResponse(
         let fullText = "";
         let tokensInput = 0;
         let tokensOutput = 0;
+        let hitMaxTokens = false;
 
         // Function calling loop: max MAX_TOOL_ITERATIONS rounds
         for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
@@ -1510,12 +1511,7 @@ async function handleStreamingResponse(
                 const finishReason =
                   chunk.candidates?.[0]?.finishReason;
                 if (finishReason === "MAX_TOKENS") {
-                  safeEnqueue(
-                    `data: ${JSON.stringify({
-                      t: "\n\n_Limite de respuesta alcanzado. Contacta a tu administrador para aumentar el limite de respuesta._",
-                      d: false,
-                    })}\n\n`
-                  );
+                  hitMaxTokens = true;
                 }
 
                 if (chunk.usageMetadata) {
@@ -1574,6 +1570,26 @@ async function handleStreamingResponse(
           }
 
           break; // Text response, done
+        }
+
+        // ── MAX_TOKENS: refund query, don't save, send error ──
+        if (hitMaxTokens) {
+          // Refund the query that was pre-incremented
+          await chatbot.rpc("refund_usage", {
+            p_id_usuario: user.id_usuario,
+          });
+
+          safeEnqueue(
+            `data: ${JSON.stringify({
+              d: true,
+              e: "RESPONSE_TOO_LONG",
+              r: usage.remaining,
+              l: usage.queries_limit,
+            })}\n\n`
+          );
+
+          try { controller.close(); } catch { /* already closed */ }
+          return;
         }
 
         // Store messages in DB
