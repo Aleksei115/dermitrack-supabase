@@ -203,7 +203,11 @@ CREATE TRIGGER validate_saga_items_unique BEFORE INSERT ON saga_transactions FOR
 CREATE TRIGGER trg_notify_task_status AFTER UPDATE ON visit_tasks FOR EACH ROW EXECUTE FUNCTION trigger_notify_task_completed();
 CREATE TRIGGER trg_notify_visit_completed AFTER UPDATE ON visits FOR EACH ROW EXECUTE FUNCTION notify_visit_completed();
 CREATE TRIGGER trg_sync_saga_status BEFORE INSERT ON visits FOR EACH ROW EXECUTE FUNCTION fn_sync_saga_status();
-CREATE TRIGGER update_cycle_surveys_updated_at BEFORE UPDATE ON archive.cycle_surveys FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    CREATE TRIGGER update_cycle_surveys_updated_at BEFORE UPDATE ON archive.cycle_surveys FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 4. Recreate RLS policies
@@ -431,19 +435,23 @@ CREATE POLICY conversations_own ON chatbot.conversations USING (user_id::text = 
 DROP POLICY IF EXISTS usage_own ON chatbot.usage_limits;
 CREATE POLICY usage_own ON chatbot.usage_limits FOR SELECT USING (user_id::text = (SELECT u.user_id FROM users u WHERE u.auth_user_id = auth.uid())::text OR EXISTS (SELECT 1 FROM users u WHERE u.auth_user_id = auth.uid() AND (u.role = ANY (ARRAY['OWNER'::user_role, 'ADMIN'::user_role]))));
 
--- Archive schema policies
-ALTER TABLE archive.cabinet_cycles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE archive.cycle_surveys ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS cycles_select ON archive.cabinet_cycles;
-CREATE POLICY cycles_select ON archive.cabinet_cycles FOR SELECT USING (can_access_client(client_id::text));
-DROP POLICY IF EXISTS cycles_insert ON archive.cabinet_cycles;
-CREATE POLICY cycles_insert ON archive.cabinet_cycles FOR INSERT WITH CHECK (can_access_client(client_id::text) AND user_id::text = current_user_id());
-DROP POLICY IF EXISTS cycles_update ON archive.cabinet_cycles;
-CREATE POLICY cycles_update ON archive.cabinet_cycles FOR UPDATE USING (is_admin()) WITH CHECK (is_admin());
-DROP POLICY IF EXISTS cycles_delete ON archive.cabinet_cycles;
-CREATE POLICY cycles_delete ON archive.cabinet_cycles FOR DELETE USING (is_admin());
-DROP POLICY IF EXISTS service_role_all ON archive.cycle_surveys;
-CREATE POLICY service_role_all ON archive.cycle_surveys USING (true) WITH CHECK (true);
+-- Archive schema policies (may not exist in all environments)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    ALTER TABLE archive.cabinet_cycles ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE archive.cycle_surveys ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS cycles_select ON archive.cabinet_cycles;
+    CREATE POLICY cycles_select ON archive.cabinet_cycles FOR SELECT USING (can_access_client(client_id::text));
+    DROP POLICY IF EXISTS cycles_insert ON archive.cabinet_cycles;
+    CREATE POLICY cycles_insert ON archive.cabinet_cycles FOR INSERT WITH CHECK (can_access_client(client_id::text) AND user_id::text = current_user_id());
+    DROP POLICY IF EXISTS cycles_update ON archive.cabinet_cycles;
+    CREATE POLICY cycles_update ON archive.cabinet_cycles FOR UPDATE USING (is_admin()) WITH CHECK (is_admin());
+    DROP POLICY IF EXISTS cycles_delete ON archive.cabinet_cycles;
+    CREATE POLICY cycles_delete ON archive.cabinet_cycles FOR DELETE USING (is_admin());
+    DROP POLICY IF EXISTS service_role_all ON archive.cycle_surveys;
+    CREATE POLICY service_role_all ON archive.cycle_surveys USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 5. Grant permissions
