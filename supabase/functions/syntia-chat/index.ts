@@ -86,7 +86,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "search_medicamentos",
           description:
-            "Busca medicamentos por similitud semantica. Usa cuando pregunten por productos para un padecimiento, condicion medica, o tipo de tratamiento.",
+            "Busca medicamentos por similitud semantica. Usa cuando pregunten por productos para un padecimiento, condicion medica, o tipo de tratamiento. IMPORTANTE: cuando recomiendas productos para un medico especifico, SIEMPRE pasa su id_cliente para excluir productos que ya tiene en botiquin o con historial (M1/M2/M3).",
           parameters: {
             type: "object",
             properties: {
@@ -94,6 +94,11 @@ const TOOL_DECLARATIONS = {
                 type: "string",
                 description:
                   "Texto de busqueda: padecimiento, sintoma, tipo de producto, o nombre de medicamento",
+              },
+              id_cliente: {
+                type: "string",
+                description:
+                  "ID del medico para excluir productos que ya tiene en su botiquin (opcional, obtenido via search_clientes)",
               },
             },
             required: ["query"],
@@ -608,15 +613,78 @@ async function executeTool(
     switch (name) {
       case "search_medicamentos": {
         const query = args.query as string;
+        const idCliente = (args.id_cliente as string) ?? null;
         const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
         const { data, error } = await chatbot.rpc("match_medicamentos", {
           query_embedding: JSON.stringify(embedding),
           match_threshold: 0.55,
-          match_count: 10,
+          match_count: idCliente ? 25 : 10, // fetch more when filtering
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No se encontraron medicamentos relevantes.";
-        return (data as AnyRow[])
+
+        let results = data as AnyRow[];
+
+        // When recommending for a specific doctor: exclude existing products + enrich with sales data
+        if (idCliente) {
+          const excludedSkus = new Set<string>();
+
+          // Fetch exclusion data + global sales in parallel
+          const [invRes, clasifRes, rankingRes] = await Promise.all([
+            chatbot.rpc("get_inventario_doctor", {
+              p_id_cliente: idCliente,
+              p_id_usuario: userId,
+              p_is_admin: true,
+            }),
+            chatbot.rpc("clasificacion_por_cliente", {
+              p_id_cliente: idCliente,
+            }),
+            chatbot.rpc("get_ranking_ventas_completo", { p_limite: 200 }),
+          ]);
+
+          // 1. Exclude current inventory
+          if (invRes.data) {
+            for (const item of invRes.data as AnyRow[]) {
+              excludedSkus.add(item.sku);
+            }
+          }
+
+          // 2. Exclude M1/M2/M3 history
+          if (clasifRes.data) {
+            for (const item of clasifRes.data as AnyRow[]) {
+              excludedSkus.add(item.sku);
+            }
+          }
+
+          const before = results.length;
+          results = results.filter((m) => !excludedSkus.has(m.sku));
+
+          if (results.length === 0) {
+            return `Se encontraron ${before} medicamentos relevantes pero todos ya estan en el botiquin o tienen historial (M1/M2/M3) con este medico. Considera otros padecimientos o categorias.`;
+          }
+
+          // 3. Enrich with global sales performance
+          const salesMap = new Map<string, AnyRow>();
+          if (rankingRes.data) {
+            for (const r of rankingRes.data as AnyRow[]) {
+              salesMap.set(r.sku, r);
+            }
+          }
+
+          results = results.slice(0, 10);
+
+          return results
+            .map((m) => {
+              const sales = salesMap.get(m.sku);
+              const salesInfo = sales
+                ? `| Ventas globales: ${sales.piezas_totales}pz $${sales.ventas_totales} (M1:$${sales.ventas_botiquin} M2:$${sales.ventas_conversion} M3:$${sales.ventas_exposicion})`
+                : "| Sin historial de ventas global";
+              return `${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | Padecimientos: ${m.padecimientos || "N/A"} ${salesInfo}`;
+            })
+            .join("\n");
+        }
+
+        return results
           .map(
             (m) =>
               `${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | Padecimientos: ${m.padecimientos || "N/A"}`
