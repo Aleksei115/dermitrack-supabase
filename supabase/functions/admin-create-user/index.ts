@@ -53,13 +53,28 @@ function corsResponse() {
   });
 }
 
-async function getCallerInfo(authHeader: string | null): Promise<CallerInfo | null> {
-  if (!authHeader) return null;
+async function getCallerInfo(
+  authHeader: string | null,
+  log?: (msg: string, extra?: unknown) => void,
+): Promise<CallerInfo | null> {
+  if (!authHeader) {
+    log?.("getCallerInfo: no auth header");
+    return null;
+  }
 
   const token = authHeader.replace("Bearer ", "");
   const { data: { user }, error } = await supabase.auth.getUser(token);
 
-  if (error || !user) return null;
+  if (error || !user) {
+    log?.("getCallerInfo: auth.getUser failed", {
+      error: error?.message ?? "no user returned",
+      code: error?.code,
+      status: (error as any)?.status,
+    });
+    return null;
+  }
+
+  log?.("getCallerInfo: auth user found", { id: user.id, email: user.email });
 
   // Get user's role from users table
   const { data: usuario, error: userError } = await supabase
@@ -68,7 +83,14 @@ async function getCallerInfo(authHeader: string | null): Promise<CallerInfo | nu
     .eq("auth_user_id", user.id)
     .single();
 
-  if (userError || !usuario) return null;
+  if (userError || !usuario) {
+    log?.("getCallerInfo: users query failed", {
+      error: userError?.message ?? "no row returned",
+      code: userError?.code,
+      authUserId: user.id,
+    });
+    return null;
+  }
 
   return {
     auth_user_id: user.id,
@@ -135,7 +157,7 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
     log("auth header present", { hasAuth: !!authHeader, length: authHeader?.length ?? 0 });
 
-    const caller = await getCallerInfo(authHeader);
+    const caller = await getCallerInfo(authHeader, log);
 
     if (!caller) {
       log("unauthorized - no valid caller", { authHeaderPresent: !!authHeader });
