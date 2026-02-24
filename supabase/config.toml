@@ -365,7 +365,35 @@ deno_version = 2
 # secret_key = "env(SECRET_VALUE)"
 
 # Per-function configuration
+# All edge functions handle their own auth internally
 [functions.syntia-chat]
+verify_jwt = false
+
+[functions.admin-create-user]
+verify_jwt = false
+
+[functions.admin-update-user-email]
+verify_jwt = false
+
+[functions.admin-send-password-reset]
+verify_jwt = false
+
+[functions.create_user]
+verify_jwt = false
+
+[functions.import-odv]
+verify_jwt = false
+
+[functions.populate-embeddings]
+verify_jwt = false
+
+[functions.push-notification]
+verify_jwt = false
+
+[functions.seed-missing-auth-users]
+verify_jwt = false
+
+[functions.send-push-notification]
 verify_jwt = false
 
 [analytics]
