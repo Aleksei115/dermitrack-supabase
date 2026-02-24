@@ -50,7 +50,7 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GCP_PROJECT_ID = Deno.env.get("GCP_PROJECT_ID")!;
 const GCP_SERVICE_ACCOUNT_KEY = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY")!;
 
-const VERTEX_MODEL = "gemini-3-flash-preview";
+const VERTEX_MODEL = "gemini-2.5-flash";
 const EMBEDDING_MODEL = "text-embedding-005";
 const EMBEDDING_DIMENSION = 768;
 const SYSTEM_PROMPT_CACHE_TTL = 10 * 60 * 1000;
