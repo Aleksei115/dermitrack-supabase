@@ -53,25 +53,30 @@ function corsResponse() {
   });
 }
 
+type CallerResult =
+  | { ok: true; caller: CallerInfo }
+  | { ok: false; reason: string; details?: unknown };
+
 async function getCallerInfo(
   authHeader: string | null,
   log?: (msg: string, extra?: unknown) => void,
-): Promise<CallerInfo | null> {
+): Promise<CallerResult> {
   if (!authHeader) {
     log?.("getCallerInfo: no auth header");
-    return null;
+    return { ok: false, reason: "no_auth_header" };
   }
 
   const token = authHeader.replace("Bearer ", "");
   const { data: { user }, error } = await supabase.auth.getUser(token);
 
   if (error || !user) {
-    log?.("getCallerInfo: auth.getUser failed", {
+    const details = {
       error: error?.message ?? "no user returned",
       code: error?.code,
       status: (error as any)?.status,
-    });
-    return null;
+    };
+    log?.("getCallerInfo: auth.getUser failed", details);
+    return { ok: false, reason: "auth_getuser_failed", details };
   }
 
   log?.("getCallerInfo: auth user found", { id: user.id, email: user.email });
@@ -84,18 +89,22 @@ async function getCallerInfo(
     .single();
 
   if (userError || !usuario) {
-    log?.("getCallerInfo: users query failed", {
+    const details = {
       error: userError?.message ?? "no row returned",
       code: userError?.code,
       authUserId: user.id,
-    });
-    return null;
+    };
+    log?.("getCallerInfo: users query failed", details);
+    return { ok: false, reason: "users_query_failed", details };
   }
 
   return {
-    auth_user_id: user.id,
-    role: usuario.role,
-    name: usuario.name,
+    ok: true,
+    caller: {
+      auth_user_id: user.id,
+      role: usuario.role,
+      name: usuario.name,
+    },
   };
 }
 
@@ -157,12 +166,18 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
     log("auth header present", { hasAuth: !!authHeader, length: authHeader?.length ?? 0 });
 
-    const caller = await getCallerInfo(authHeader, log);
+    const callerResult = await getCallerInfo(authHeader, log);
 
-    if (!caller) {
-      log("unauthorized - no valid caller", { authHeaderPresent: !!authHeader });
-      return jsonResponse({ error: "No autorizado" }, 401);
+    if (!callerResult.ok) {
+      log("unauthorized - no valid caller", { authHeaderPresent: !!authHeader, reason: callerResult.reason });
+      return jsonResponse({
+        error: "No autorizado",
+        debug_reason: callerResult.reason,
+        debug_details: callerResult.details,
+      }, 401);
     }
+
+    const caller = callerResult.caller;
 
     if (!["OWNER", "ADMIN"].includes(caller.role)) {
       log("forbidden - caller is not OWNER or ADMINISTRADOR", { role: caller.role });
