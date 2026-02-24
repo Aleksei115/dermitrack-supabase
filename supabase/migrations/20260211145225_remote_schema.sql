@@ -11086,7 +11086,19 @@ CREATE TRIGGER audit_movimientos_inventario AFTER INSERT OR DELETE OR UPDATE ON 
 
 CREATE TRIGGER trg_remove_sku_disponible_on_venta AFTER INSERT ON public.movimientos_inventario FOR EACH ROW EXECUTE FUNCTION public.fn_remove_sku_disponible_on_venta();
 
-CREATE TRIGGER "push-notification-webhook │" AFTER INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request('https://ysxmbijpskjpwuvuklag.supabase.co/functions/v1/push-notification', 'POST', '{}', '{}', '5000');
+-- Database webhook: managed via Supabase Dashboard, not migrations.
+-- supabase_functions schema does not exist on preview branches.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'supabase_functions') THEN
+    CREATE TRIGGER "push-notification-webhook"
+      AFTER INSERT ON public.notifications
+      FOR EACH ROW
+      EXECUTE FUNCTION supabase_functions.http_request(
+        'https://ysxmbijpskjpwuvuklag.supabase.co/functions/v1/push-notification',
+        'POST', '{}', '{}', '5000'
+      );
+  END IF;
+END $$;
 
 CREATE TRIGGER audit_saga_transactions AFTER INSERT OR DELETE OR UPDATE ON public.saga_transactions FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
