@@ -534,21 +534,26 @@ async function callGemini(
   const token = await getAccessToken();
   const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:generateContent`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
-    }),
-  });
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
+      }),
+    });
+    if (res.status !== 429 || attempt === 2) break;
+    await new Promise((r) => setTimeout(r, 2000 * Math.pow(2, attempt)));
+  }
 
-  if (!res.ok) {
-    throw new Error(`Gemini API error (${res.status}): ${await res.text()}`);
+  if (!res!.ok) {
+    throw new Error(`Gemini API error (${res!.status}): ${await res!.text()}`);
   }
 
   const data = await res.json();
@@ -1493,27 +1498,40 @@ async function handleStreamingResponse(
           const token = await getAccessToken();
           const url = `https://aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google/models/${VERTEX_MODEL}:streamGenerateContent?alt=sse`;
 
-          const geminiRes = await fetch(url, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-              contents: mutableContents,
-              ...TOOL_DECLARATIONS,
-              generationConfig: {
-                maxOutputTokens: 1024,
-                temperature: 0.3,
+          let geminiRes: Response | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            geminiRes = await fetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
               },
-            }),
-          });
+              body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                contents: mutableContents,
+                ...TOOL_DECLARATIONS,
+                generationConfig: {
+                  maxOutputTokens: 1024,
+                  temperature: 0.3,
+                },
+              }),
+            });
 
-          if (!geminiRes.ok) {
-            const err = await geminiRes.text();
+            if (geminiRes.status !== 429 || attempt === 2) break;
+            // Exponential backoff: 2s, 4s
+            const delay = 2000 * Math.pow(2, attempt);
+            console.warn(`Gemini 429 rate limit, retrying in ${delay}ms (attempt ${attempt + 1}/3)`);
+            safeEnqueue(`data: ${JSON.stringify({ t: "", d: false })}\n\n`);
+            await new Promise((r) => setTimeout(r, delay));
+          }
+
+          if (!geminiRes!.ok) {
+            const err = await geminiRes!.text();
+            if (geminiRes!.status === 429) {
+              throw new Error("El servicio está ocupado. Intenta de nuevo en unos segundos.");
+            }
             throw new Error(
-              `Gemini streaming error (${geminiRes.status}): ${err}`
+              `Gemini streaming error (${geminiRes!.status}): ${err}`
             );
           }
 
