@@ -1506,6 +1506,18 @@ async function handleStreamingResponse(
                   }
                 }
 
+                // Detect max tokens truncation
+                const finishReason =
+                  chunk.candidates?.[0]?.finishReason;
+                if (finishReason === "MAX_TOKENS") {
+                  safeEnqueue(
+                    `data: ${JSON.stringify({
+                      t: "\n\n_Limite de respuesta alcanzado. Contacta a tu administrador para aumentar el limite de respuesta._",
+                      d: false,
+                    })}\n\n`
+                  );
+                }
+
                 if (chunk.usageMetadata) {
                   tokensInput =
                     chunk.usageMetadata.promptTokenCount ?? tokensInput;
