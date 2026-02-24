@@ -47,9 +47,13 @@ ALTER TABLE public.visita_informes RENAME TO visit_reports;
 ALTER TABLE public.visitas RENAME TO visits;
 ALTER TABLE public.zonas RENAME TO zones;
 
--- Archive schema tables
-ALTER TABLE archive.ciclos_botiquin RENAME TO cabinet_cycles;
-ALTER TABLE archive.encuestas_ciclo RENAME TO cycle_surveys;
+-- Archive schema tables (may not exist in all environments)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    ALTER TABLE archive.ciclos_botiquin RENAME TO cabinet_cycles;
+    ALTER TABLE archive.encuestas_ciclo RENAME TO cycle_surveys;
+  END IF;
+END $$;
 
 -- Chatbot schema tables
 ALTER TABLE chatbot.ficha_tecnica_chunks RENAME TO data_sheet_chunks;
@@ -217,21 +221,23 @@ ALTER TABLE public.zones RENAME COLUMN activo TO active;
 ALTER TABLE public.zones RENAME COLUMN id_zona TO zone_id;
 ALTER TABLE public.zones RENAME COLUMN nombre TO name;
 
--- Table: archive.cabinet_cycles
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN fecha_creacion TO created_date;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_ciclo TO cycle_id;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_ciclo_anterior TO previous_cycle_id;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_cliente TO client_id;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_usuario TO user_id;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN latitud TO latitude;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN longitud TO longitude;
-ALTER TABLE archive.cabinet_cycles RENAME COLUMN tipo TO type;
-
--- Table: archive.cycle_surveys
-ALTER TABLE archive.cycle_surveys RENAME COLUMN completada TO completed;
-ALTER TABLE archive.cycle_surveys RENAME COLUMN fecha_completada TO completed_date;
-ALTER TABLE archive.cycle_surveys RENAME COLUMN id_ciclo TO cycle_id;
-ALTER TABLE archive.cycle_surveys RENAME COLUMN respuestas TO responses;
+-- Table: archive.cabinet_cycles + archive.cycle_surveys (may not exist)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN fecha_creacion TO created_date;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_ciclo TO cycle_id;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_ciclo_anterior TO previous_cycle_id;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_cliente TO client_id;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN id_usuario TO user_id;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN latitud TO latitude;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN longitud TO longitude;
+    ALTER TABLE archive.cabinet_cycles RENAME COLUMN tipo TO type;
+    ALTER TABLE archive.cycle_surveys RENAME COLUMN completada TO completed;
+    ALTER TABLE archive.cycle_surveys RENAME COLUMN fecha_completada TO completed_date;
+    ALTER TABLE archive.cycle_surveys RENAME COLUMN id_ciclo TO cycle_id;
+    ALTER TABLE archive.cycle_surveys RENAME COLUMN respuestas TO responses;
+  END IF;
+END $$;
 
 -- Table: chatbot.conversations
 ALTER TABLE chatbot.conversations RENAME COLUMN id_usuario TO user_id;
