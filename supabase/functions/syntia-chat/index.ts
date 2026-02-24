@@ -210,7 +210,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_recolecciones",
           description:
-            "Obtiene recolecciones (devoluciones de productos) del usuario. Incluye estado, items recolectados, observaciones de CEDIS.",
+            "Obtiene recolecciones (devoluciones de productos) del usuario. Cada recoleccion es un evento de devolucion que contiene multiples items con sus cantidades en piezas. IMPORTANTE: 'recolecciones' son eventos, 'piezas' son la suma de cantidades de items. No confundir el numero de recolecciones con el numero de piezas.",
           parameters: {
             type: "object",
             properties: {
@@ -743,21 +743,22 @@ async function executeTool(
         );
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No se encontraron recolecciones.";
-        return (data as AnyRow[])
-          .map((r) => {
-            const items =
-              r.items
-                ?.map(
-                  (i: { sku: string; cantidad: number }) =>
-                    `${i.sku} x${i.cantidad}`
-                )
-                .join(", ") ?? "Sin items";
-            const obs = r.cedis_observaciones
-              ? ` | Obs: ${r.cedis_observaciones}`
-              : "";
-            return `${r.created_at?.substring(0, 10)} | ${r.nombre_cliente} | ${r.estado} | ${items}${obs}`;
-          })
-          .join("\n");
+        const rows = data as AnyRow[];
+        let totalPiezasGlobal = 0;
+        const lines = rows.map((r) => {
+          const itemsList: { sku: string; cantidad: number }[] = r.items ?? [];
+          const piezas = itemsList.reduce((sum, i) => sum + (i.cantidad || 0), 0);
+          totalPiezasGlobal += piezas;
+          const items = itemsList.length > 0
+            ? itemsList.map((i) => `${i.sku} x${i.cantidad}`).join(", ")
+            : "Sin items";
+          const obs = r.cedis_observaciones
+            ? ` | Obs: ${r.cedis_observaciones}`
+            : "";
+          return `${r.created_at?.substring(0, 10)} | ${r.nombre_cliente} | ${r.estado} | ${piezas} piezas | ${items}${obs}`;
+        });
+        const resumen = `Resumen: ${rows.length} recolecciones, ${totalPiezasGlobal} piezas en total`;
+        return `${resumen}\n---\n${lines.join("\n")}`;
       }
 
       case "get_estadisticas_corte": {
