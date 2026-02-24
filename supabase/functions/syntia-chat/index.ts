@@ -5,8 +5,8 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 // ============================================================================
 
 interface UserInfo {
-  id_usuario: string;
-  rol: string;
+  user_id: string;
+  role: string;
   auth_user_id: string;
 }
 
@@ -86,7 +86,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "search_medicamentos",
           description:
-            "Busca medicamentos por similitud semantica. Usa cuando pregunten por productos para un padecimiento, condicion medica, o tipo de tratamiento. IMPORTANTE: cuando recomiendas productos para un medico especifico, SIEMPRE pasa su id_cliente para excluir productos que ya tiene en botiquin o con historial (M1/M2/M3).",
+            "Busca medicamentos por similitud semantica. Usa cuando pregunten por productos para un padecimiento, condicion medica, o tipo de tratamiento. IMPORTANTE: cuando recomiendas productos para un medico especifico, SIEMPRE pasa su client_id para excluir productos que ya tiene en botiquin o con historial (M1/M2/M3).",
           parameters: {
             type: "object",
             properties: {
@@ -95,7 +95,7 @@ const TOOL_DECLARATIONS = {
                 description:
                   "Texto de busqueda: padecimiento, sintoma, tipo de producto, o nombre de medicamento",
               },
-              id_cliente: {
+              client_id: {
                 type: "string",
                 description:
                   "ID del medico para excluir productos que ya tiene en su botiquin (opcional, obtenido via search_clientes)",
@@ -123,32 +123,32 @@ const TOOL_DECLARATIONS = {
         {
           name: "search_clientes",
           description:
-            "Busca medicos/clientes por nombre. SIEMPRE usa esta herramienta primero cuando mencionen un nombre de medico para obtener su id_cliente antes de consultar datos del medico.",
+            "Busca medicos/clientes por nombre. SIEMPRE usa esta herramienta primero cuando mencionen un nombre de medico para obtener su client_id antes de consultar datos del medico.",
           parameters: {
             type: "object",
             properties: {
-              nombre: {
+              name: {
                 type: "string",
                 description:
                   "Nombre del medico a buscar (puede ser parcial, ej: 'Garcia', 'Dr Lopez')",
               },
             },
-            required: ["nombre"],
+            required: ["name"],
           },
         },
         {
           name: "get_inventario_doctor",
           description:
-            "Obtiene el inventario actual del botiquin de un medico especifico. Muestra SKUs, cantidades y precios. Requiere id_cliente (obtenido via search_clientes).",
+            "Obtiene el inventario actual del botiquin de un medico especifico. Muestra SKUs, cantidades y precios. Requiere client_id (obtenido via search_clientes).",
           parameters: {
             type: "object",
             properties: {
-              id_cliente: {
+              client_id: {
                 type: "string",
                 description: "ID del cliente/medico",
               },
             },
-            required: ["id_cliente"],
+            required: ["client_id"],
           },
         },
         {
@@ -158,7 +158,7 @@ const TOOL_DECLARATIONS = {
           parameters: {
             type: "object",
             properties: {
-              id_cliente: {
+              client_id: {
                 type: "string",
                 description: "ID del cliente/medico",
               },
@@ -174,7 +174,7 @@ const TOOL_DECLARATIONS = {
                   "Numero maximo de resultados (default 30, max 100)",
               },
             },
-            required: ["id_cliente"],
+            required: ["client_id"],
           },
         },
         {
@@ -184,12 +184,12 @@ const TOOL_DECLARATIONS = {
           parameters: {
             type: "object",
             properties: {
-              id_cliente: {
+              client_id: {
                 type: "string",
                 description: "ID del cliente/medico",
               },
             },
-            required: ["id_cliente"],
+            required: ["client_id"],
           },
         },
         {
@@ -219,7 +219,7 @@ const TOOL_DECLARATIONS = {
           parameters: {
             type: "object",
             properties: {
-              id_cliente: {
+              client_id: {
                 type: "string",
                 description:
                   "Filtrar por medico especifico (opcional). Si no se proporciona, devuelve todas las recolecciones del usuario.",
@@ -394,7 +394,7 @@ const TOOL_DECLARATIONS = {
                 description:
                   "Nombre del producto, SKU, o termino de busqueda",
               },
-              marca: {
+              brand: {
                 type: "string",
                 description: "Filtrar por marca (opcional)",
               },
@@ -564,8 +564,8 @@ async function callGemini(
 // ============================================================================
 
 function getUserFilter(user: UserInfo): { isAdmin: boolean; userId: string } {
-  const isAdmin = user.rol === "OWNER" || user.rol === "ADMINISTRADOR";
-  return { isAdmin, userId: user.id_usuario };
+  const isAdmin = user.role === "OWNER" || user.role === "ADMIN";
+  return { isAdmin, userId: user.user_id };
 }
 
 async function getSystemPrompt(): Promise<string> {
@@ -613,7 +613,7 @@ async function executeTool(
     switch (name) {
       case "search_medicamentos": {
         const query = args.query as string;
-        const idCliente = (args.id_cliente as string) ?? null;
+        const idCliente = (args.client_id as string) ?? null;
         const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
         const { data, error } = await chatbot.rpc("match_medicamentos", {
           query_embedding: JSON.stringify(embedding),
@@ -632,12 +632,12 @@ async function executeTool(
           // Fetch exclusion data + global sales in parallel
           const [invRes, clasifRes, rankingRes] = await Promise.all([
             chatbot.rpc("get_inventario_doctor", {
-              p_id_cliente: idCliente,
-              p_id_usuario: userId,
+              p_client_id: idCliente,
+              p_user_id: userId,
               p_is_admin: true,
             }),
             chatbot.rpc("clasificacion_por_cliente", {
-              p_id_cliente: idCliente,
+              p_client_id: idCliente,
             }),
             chatbot.rpc("get_ranking_ventas_completo", { p_limite: 200 }),
           ]);
@@ -679,7 +679,7 @@ async function executeTool(
               const salesInfo = sales
                 ? `| Ventas globales: ${sales.piezas_totales}pz $${sales.ventas_totales} (M1:$${sales.ventas_botiquin} M2:$${sales.ventas_conversion} M3:$${sales.ventas_exposicion})`
                 : "| Sin historial de ventas global";
-              return `${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | Padecimientos: ${m.padecimientos || "N/A"} ${salesInfo}`;
+              return `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.padecimientos || "N/A"} ${salesInfo}`;
             })
             .join("\n");
         }
@@ -687,7 +687,7 @@ async function executeTool(
         return results
           .map(
             (m) =>
-              `${m.sku}: ${m.descripcion} (${m.marca}) $${m.precio} | ${m.contenido ?? ""} | Padecimientos: ${m.padecimientos || "N/A"}`
+              `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.padecimientos || "N/A"}`
           )
           .join("\n");
       }
@@ -709,10 +709,10 @@ async function executeTool(
       }
 
       case "search_clientes": {
-        const nombre = args.nombre as string;
+        const nombre = args.name as string;
         const { data, error } = await chatbot.rpc("fuzzy_search_clientes", {
           p_search: nombre,
-          p_id_usuario: null,
+          p_user_id: null,
           p_limit: 5,
         });
         if (error) return `Error: ${error.message}`;
@@ -720,16 +720,16 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (c) =>
-              `id_cliente: ${c.id_cliente} | Nombre: ${c.nombre} | Similitud: ${(c.similarity * 100).toFixed(0)}%`
+              `client_id: ${c.client_id} | Nombre: ${c.name} | Similitud: ${(c.similarity * 100).toFixed(0)}%`
           )
           .join("\n");
       }
 
       case "get_inventario_doctor": {
-        const idCliente = args.id_cliente as string;
+        const idCliente = args.client_id as string;
         const { data, error } = await chatbot.rpc("get_inventario_doctor", {
-          p_id_cliente: idCliente,
-          p_id_usuario: userId,
+          p_client_id: idCliente,
+          p_user_id: userId,
           p_is_admin: isAdmin,
         });
         if (error) return `Error: ${error.message}`;
@@ -738,18 +738,18 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (item) =>
-              `${item.sku}: ${item.descripcion} (${item.marca}) | Cant: ${item.cantidad_disponible} | $${item.precio} | ${item.contenido ?? ""}`
+              `${item.sku}: ${item.description} (${item.brand}) | Cant: ${item.quantity_disponible} | $${item.price} | ${item.content ?? ""}`
           )
           .join("\n");
       }
 
       case "get_movimientos_doctor": {
-        const idCliente = args.id_cliente as string;
+        const idCliente = args.client_id as string;
         const fuente = (args.fuente as string) ?? "ambos";
         const limite = (args.limite as number) ?? 30;
         const { data, error } = await chatbot.rpc("get_movimientos_doctor", {
-          p_id_cliente: idCliente,
-          p_id_usuario: userId,
+          p_client_id: idCliente,
+          p_user_id: userId,
           p_is_admin: true,
           p_fuente: fuente,
           p_limite: limite,
@@ -760,16 +760,16 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (m) =>
-              `[${m.fuente}] ${m.fecha?.substring(0, 10) ?? "?"} | ${m.tipo}: ${m.sku} - ${m.descripcion} (${m.marca}) x${m.cantidad} @ $${m.precio ?? 0}`
+              `[${m.fuente}] ${m.fecha?.substring(0, 10) ?? "?"} | ${m.type}: ${m.sku} - ${m.description} (${m.brand}) x${m.quantity} @ $${m.price ?? 0}`
           )
           .join("\n");
       }
 
       case "get_clasificacion_cliente": {
-        const idCliente = args.id_cliente as string;
+        const idCliente = args.client_id as string;
         const { data, error } = await chatbot.rpc(
           "clasificacion_por_cliente",
-          { p_id_cliente: idCliente }
+          { p_client_id: idCliente }
         );
         if (error) return `Error: ${error.message}`;
         if (!data?.length)
@@ -783,7 +783,7 @@ async function executeTool(
         const skuFilter = (args.sku_filter as string) ?? null;
         const limite = (args.limite as number) ?? 50;
         const { data, error } = await chatbot.rpc("get_ventas_odv_usuario", {
-          p_id_usuario: userId,
+          p_user_id: userId,
           p_is_admin: true,
           p_sku_filter: skuFilter,
           p_limite: limite,
@@ -793,18 +793,18 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (v) =>
-              `${v.fecha} | ${v.nombre_cliente} | ${v.sku}: ${v.descripcion} (${v.marca}) x${v.cantidad} @ $${v.precio}`
+              `${v.fecha} | ${v.client_name} | ${v.sku}: ${v.description} (${v.brand}) x${v.quantity} @ $${v.price}`
           )
           .join("\n");
       }
 
       case "get_recolecciones": {
-        const idCliente = (args.id_cliente as string) ?? null;
+        const idCliente = (args.client_id as string) ?? null;
         const { data, error } = await chatbot.rpc(
           "get_recolecciones_usuario",
           {
-            p_id_usuario: userId,
-            p_id_cliente: idCliente,
+            p_user_id: userId,
+            p_client_id: idCliente,
             p_limit: 20,
             p_is_admin: isAdmin,
           }
@@ -814,16 +814,16 @@ async function executeTool(
         const rows = data as AnyRow[];
         let totalPiezasGlobal = 0;
         const lines = rows.map((r) => {
-          const itemsList: { sku: string; cantidad: number }[] = r.items ?? [];
-          const piezas = itemsList.reduce((sum, i) => sum + (i.cantidad || 0), 0);
+          const itemsList: { sku: string; quantity: number }[] = r.items ?? [];
+          const piezas = itemsList.reduce((sum, i) => sum + (i.quantity || 0), 0);
           totalPiezasGlobal += piezas;
           const items = itemsList.length > 0
-            ? itemsList.map((i) => `${i.sku} x${i.cantidad}`).join(", ")
+            ? itemsList.map((i) => `${i.sku} x${i.quantity}`).join(", ")
             : "Sin items";
           const obs = r.cedis_observaciones
             ? ` | Obs: ${r.cedis_observaciones}`
             : "";
-          return `${r.created_at?.substring(0, 10)} | ${r.nombre_cliente} | ${r.estado} | ${piezas} piezas | ${items}${obs}`;
+          return `${r.created_at?.substring(0, 10)} | ${r.client_name} | ${r.status} | ${piezas} piezas | ${items}${obs}`;
         });
         const resumen = `Resumen: ${rows.length} recolecciones, ${totalPiezasGlobal} piezas en total`;
         return `${resumen}\n---\n${lines.join("\n")}`;
@@ -881,7 +881,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (p) =>
-              `${p.sku}: ${p.descripcion} (${p.marca}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`
+              `${p.sku}: ${p.description} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`
           )
           .join("\n");
       }
@@ -895,7 +895,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (b) =>
-              `${b.marca} | Botiquin(M1): ${b.piezas_botiquin}pz $${b.ventas_botiquin} | Conversion(M2): ${b.piezas_conversion}pz $${b.ventas_conversion} | Exposicion(M3): ${b.piezas_exposicion}pz $${b.ventas_exposicion} | TOTAL: ${b.piezas_totales}pz $${b.ventas_totales}`
+              `${b.brand} | Botiquin(M1): ${b.piezas_botiquin}pz $${b.ventas_botiquin} | Conversion(M2): ${b.piezas_conversion}pz $${b.ventas_conversion} | Exposicion(M3): ${b.piezas_exposicion}pz $${b.ventas_exposicion} | TOTAL: ${b.piezas_totales}pz $${b.ventas_totales}`
           )
           .join("\n");
       }
@@ -931,7 +931,7 @@ async function executeTool(
           limited
             .map(
               (m) =>
-                `${m.nombre_cliente} | Rango: ${m.rango_actual ?? "N/A"} | Fact: $${m.facturacion_actual ?? 0} | Baseline: $${m.baseline ?? 0} | M1: $${m.current_m1 ?? 0} | M2: $${m.current_m2 ?? 0} | M3: $${m.current_m3 ?? 0} | Crec: ${m.pct_crecimiento ?? 0}%`
+                `${m.client_name} | Rango: ${m.rango_actual ?? "N/A"} | Fact: $${m.facturacion_actual ?? 0} | Baseline: $${m.baseline ?? 0} | M1: $${m.current_m1 ?? 0} | M2: $${m.current_m2 ?? 0} | M3: $${m.current_m3 ?? 0} | Crec: ${m.pct_crecimiento ?? 0}%`
             )
             .join("\n")
         );
@@ -985,10 +985,10 @@ async function executeTool(
 
       case "get_precios_medicamentos": {
         const busqueda = args.busqueda as string;
-        const marca = (args.marca as string) ?? null;
+        const marca = (args.brand as string) ?? null;
         const { data, error } = await chatbot.rpc("get_precios_medicamentos", {
           p_busqueda: busqueda,
-          p_marca_filter: marca,
+          p_brand_filter: marca,
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length)
@@ -996,7 +996,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (m) =>
-              `${m.sku}: ${m.descripcion} (${m.marca}) | $${m.precio} | ${m.contenido ?? ""} | Actualizado: ${m.ultima_actualizacion?.substring(0, 10) ?? "N/A"}`
+              `${m.sku}: ${m.description} (${m.brand}) | $${m.price} | ${m.content ?? ""} | Actualizado: ${m.ultima_actualizacion?.substring(0, 10) ?? "N/A"}`
           )
           .join("\n");
       }
@@ -1044,7 +1044,7 @@ async function getPreviousSummaries(
   let query = chatbot
     .from("conversations")
     .select("summary")
-    .eq("id_usuario", userId)
+    .eq("user_id", userId)
     .not("summary", "is", null)
     .order("created_at", { ascending: false })
     .limit(3);
@@ -1149,15 +1149,15 @@ function buildGeminiHistory(
 
 async function resolveUser(authUserId: string): Promise<UserInfo | null> {
   const { data, error } = await admin
-    .from("usuarios")
-    .select("id_usuario, rol, auth_user_id")
+    .from("users")
+    .select("user_id, role, auth_user_id")
     .eq("auth_user_id", authUserId)
     .single();
 
   if (error || !data) return null;
   return {
-    id_usuario: data.id_usuario,
-    rol: data.rol,
+    user_id: data.user_id,
+    role: data.role,
     auth_user_id: data.auth_user_id,
   };
 }
@@ -1183,8 +1183,8 @@ async function verifyJwt(req: Request): Promise<string | null> {
 
 async function handleUsage(user: UserInfo): Promise<Response> {
   const { data, error } = await chatbot.rpc("get_remaining_queries", {
-    p_id_usuario: user.id_usuario,
-    p_rol: user.rol,
+    p_user_id: user.user_id,
+    p_role: user.role,
   });
 
   if (error) {
@@ -1233,11 +1233,11 @@ async function handleRate(
 
   const { data: conv } = await chatbot
     .from("conversations")
-    .select("id_usuario")
+    .select("user_id")
     .eq("id", msg.conversation_id)
     .single();
 
-  if (!conv || conv.id_usuario !== user.id_usuario) {
+  if (!conv || conv.user_id !== user.user_id) {
     return jsonResponse(
       { error: "No tienes acceso a este mensaje" },
       403
@@ -1272,12 +1272,12 @@ async function handleHistory(
 
   const { data: conv } = await chatbot
     .from("conversations")
-    .select("id_usuario")
+    .select("user_id")
     .eq("id", body.conversation_id)
     .single();
 
-  const isAdmin = user.rol === "OWNER" || user.rol === "ADMINISTRADOR";
-  if (!conv || (conv.id_usuario !== user.id_usuario && !isAdmin)) {
+  const isAdmin = user.role === "OWNER" || user.role === "ADMIN";
+  if (!conv || (conv.user_id !== user.user_id && !isAdmin)) {
     return jsonResponse({ error: "Conversacion no encontrada" }, 404);
   }
 
@@ -1321,8 +1321,8 @@ async function handleSendMessage(
   // 1. Rate limit + OAuth pre-warm in parallel
   const [usageResult, _token] = await Promise.all([
     chatbot.rpc("check_and_increment_usage", {
-      p_id_usuario: user.id_usuario,
-      p_rol: user.rol,
+      p_user_id: user.user_id,
+      p_role: user.role,
     }),
     getAccessToken().catch(() => null),
   ]);
@@ -1358,11 +1358,11 @@ async function handleSendMessage(
     if (conversationId) {
       const { data: conv } = await chatbot
         .from("conversations")
-        .select("id_usuario")
+        .select("user_id")
         .eq("id", conversationId)
         .single();
 
-      if (!conv || conv.id_usuario !== user.id_usuario) {
+      if (!conv || conv.user_id !== user.user_id) {
         conversationId = undefined;
       }
     }
@@ -1370,7 +1370,7 @@ async function handleSendMessage(
     if (!conversationId) {
       const { data: newConv, error: convError } = await chatbot
         .from("conversations")
-        .insert({ id_usuario: user.id_usuario })
+        .insert({ user_id: user.user_id })
         .select("id")
         .single();
 
@@ -1383,7 +1383,7 @@ async function handleSendMessage(
     // 3. Build context — NO RAG pre-loading, just system prompt + history
     const [systemPrompt, prevSummaries, history] = await Promise.all([
       getSystemPrompt(),
-      getPreviousSummaries(user.id_usuario, conversationId),
+      getPreviousSummaries(user.user_id, conversationId),
       getConversationHistory(conversationId),
     ]);
 
@@ -1393,7 +1393,7 @@ async function handleSendMessage(
     // System prompt with user identity (tools provide data on-demand)
     const fullSystemPrompt = [
       systemPrompt,
-      `\nUSUARIO: id_usuario=${user.id_usuario}, rol=${user.rol}`,
+      `\nUSER: user_id=${user.user_id}, role=${user.role}`,
       prevSummaries ? `\n\n${prevSummaries}` : "",
     ].join("");
 
@@ -1427,7 +1427,7 @@ async function handleSendMessage(
   } catch (error) {
     try {
       await chatbot.rpc("rollback_usage", {
-        p_id_usuario: user.id_usuario,
+        p_user_id: user.user_id,
       });
     } catch (rollbackErr) {
       console.error("Rollback failed:", rollbackErr);
@@ -1644,7 +1644,7 @@ async function handleStreamingResponse(
         if (hitMaxTokens) {
           // Refund the query that was pre-incremented
           await chatbot.rpc("refund_usage", {
-            p_id_usuario: user.id_usuario,
+            p_user_id: user.user_id,
           });
 
           safeEnqueue(

@@ -6,13 +6,13 @@ type CreatePayload = {
   is_usuario?: string;
   user_metadata?: Record<string, unknown>;
   perfil?: {
-    id_usuario?: string;     // opcional para nueva fila
-    nombre?: string;
+    user_id?: string;     // opcional para nueva fila
+    name?: string;
     email?: string;          // si lo envías, validamos que coincida o lo sobreescribimos con el email principal
     password?: string;       // solo para tabla, no para Auth
-    rol?: string;
-    activo?: boolean;
-    fecha_creacion?: string; // ISO o 'YYYY-MM-DD HH:MM:SS'
+    role?: string;
+    active?: boolean;
+    created_date?: string; // ISO o 'YYYY-MM-DD HH:MM:SS'
     auth_user_id?: string;   // será sobrescrito
     [k: string]: unknown;
   };
@@ -24,14 +24,14 @@ const AUTH_ADMIN_URL = `${SUPABASE_URL}/auth/v1/admin/users`;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-const USUARIOS_COLUMNS = new Set([
-  "id_usuario",
-  "nombre",
+const USERS_COLUMNS = new Set([
+  "user_id",
+  "name",
   "email",
   "password",
-  "rol",
-  "activo",
-  "fecha_creacion",
+  "role",
+  "active",
+  "created_date",
   "auth_user_id",
 ]);
 
@@ -39,12 +39,12 @@ function sanitizePerfil(perfil: Record<string, unknown> | undefined | null) {
   const out: Record<string, unknown> = {};
   if (!perfil || typeof perfil !== "object") return out;
   for (const [k, v] of Object.entries(perfil)) {
-    if (USUARIOS_COLUMNS.has(k)) out[k] = v;
+    if (USERS_COLUMNS.has(k)) out[k] = v;
   }
   return out;
 }
 
-function defaultNombreFromEmail(email: string) {
+function defaultNameFromEmail(email: string) {
   const local = email.split("@")[0] || "Usuario";
   return local.replace(/[._-]+/g, " ").trim();
 }
@@ -106,10 +106,10 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // 2) Buscar perfil por email en public.usuarios
+    // 2) Buscar perfil por email en public.users
     const { data: existing, error: findErr } = await admin
-      .from("usuarios")
-      .select("id_usuario, auth_user_id")
+      .from("users")
+      .select("user_id, auth_user_id")
       .eq("email", authEmail)
       .maybeSingle();
 
@@ -128,7 +128,7 @@ Deno.serve(async (req: Request) => {
     // Si existe, linkeamos auth_user_id
     if (existing) {
       const { error: updErr } = await admin
-        .from("usuarios")
+        .from("users")
         .update({ auth_user_id: authId })
         .eq("email", authEmail);
 
@@ -147,7 +147,7 @@ Deno.serve(async (req: Request) => {
         JSON.stringify({
           id: authId,
           email: authEmail,
-          linked_usuario_email: authEmail,
+          linked_user_email: authEmail,
         }),
         { status: 201, headers: { "Content-Type": "application/json" } }
       );
@@ -159,16 +159,16 @@ Deno.serve(async (req: Request) => {
     // Aplicar defaults
     safePerfil.email = authEmail; // forzamos a coincidir
     if (!("password" in safePerfil) || !safePerfil.password) safePerfil.password = "DISABLED";
-    if (!("nombre" in safePerfil) || !safePerfil.nombre) safePerfil.nombre = defaultNombreFromEmail(authEmail);
-    if (!("rol" in safePerfil) || !safePerfil.rol) safePerfil.rol = "USUARIO";
-    if (!("activo" in safePerfil)) safePerfil.activo = true;
-    if (!("fecha_creacion" in safePerfil) || !safePerfil.fecha_creacion) {
-      safePerfil.fecha_creacion = new Date().toISOString();
+    if (!("name" in safePerfil) || !safePerfil.name) safePerfil.name = defaultNameFromEmail(authEmail);
+    if (!("role" in safePerfil) || !safePerfil.role) safePerfil.role = "USUARIO";
+    if (!("active" in safePerfil)) safePerfil.active = true;
+    if (!("created_date" in safePerfil) || !safePerfil.created_date) {
+      safePerfil.created_date = new Date().toISOString();
     }
     safePerfil.auth_user_id = authId;
 
     const { data: inserted, error: insErr } = await admin
-      .from("usuarios")
+      .from("users")
       .insert(safePerfil)
       .select("*")
       .single();

@@ -261,7 +261,7 @@ function chunkText(text: string, chunkSize: number): string[] {
 // Paginated Medicamento Embeddings
 // ============================================================================
 
-async function populateMedicamentoEmbeddings(
+async function populateMedicationEmbeddings(
   offset: number,
   limit: number
 ): Promise<{
@@ -274,7 +274,7 @@ async function populateMedicamentoEmbeddings(
 
   // Get existing SKUs that already have embeddings
   const { data: existing } = await chatbot
-    .from("medicamento_embeddings")
+    .from("medication_embeddings")
     .select("sku");
 
   const existingSkus = new Set(
@@ -284,8 +284,8 @@ async function populateMedicamentoEmbeddings(
   // Get medicamentos page (only those WITHOUT embeddings)
   // We fetch all SKUs and filter, then paginate the filtered list
   const { data: allMeds, error: medsErr } = await admin
-    .from("medicamentos")
-    .select("sku, marca, descripcion, contenido, precio")
+    .from("medications")
+    .select("sku, brand, description, content, price")
     .order("sku");
 
   if (medsErr || !allMeds) {
@@ -315,25 +315,25 @@ async function populateMedicamentoEmbeddings(
 
     // Fetch padecimientos only for this batch
     const { data: padData } = await admin
-      .from("medicamento_padecimientos")
-      .select("sku, padecimientos(nombre)")
+      .from("medication_conditions")
+      .select("sku,conditions(name)")
       .in("sku", skus);
 
     const padMap: Record<string, string[]> = {};
     for (const row of padData ?? []) {
-      const pad = (row as { sku: string; padecimientos: { nombre: string } | null }).padecimientos;
+      const pad = (row as { sku: string; conditions: { name: string } | null }).conditions;
       if (pad) {
         if (!padMap[row.sku]) padMap[row.sku] = [];
-        padMap[row.sku].push(pad.nombre);
+        padMap[row.sku].push(pad.name);
       }
     }
 
     const texts = batch.map(
-      (m: { sku: string; marca: string; descripcion: string; contenido: string | null; precio: number | null }) => {
+      (m: { sku: string; brand: string; description: string; content: string | null; price: number | null }) => {
         const pads = padMap[m.sku] ?? [];
         const padStr =
           pads.length > 0 ? ` Padecimientos: ${pads.join(", ")}` : "";
-        return `${m.sku} ${m.marca} ${m.descripcion ?? ""} ${m.contenido ?? ""} Precio: $${m.precio ?? 0}${padStr}`;
+        return `${m.sku} ${m.brand} ${m.description ?? ""} ${m.content ?? ""} Precio: $${m.price ?? 0}${padStr}`;
       }
     );
 
@@ -346,7 +346,7 @@ async function populateMedicamentoEmbeddings(
       // Upsert one at a time to minimize memory
       for (let j = 0; j < batch.length; j++) {
         const { error: upsertErr } = await chatbot
-          .from("medicamento_embeddings")
+          .from("medication_embeddings")
           .upsert(
             {
               sku: batch[j].sku,
@@ -382,7 +382,7 @@ async function populateMedicamentoEmbeddings(
 // Paginated Ficha Tecnica Chunks
 // ============================================================================
 
-async function populateFichaTecnicaChunks(
+async function populateDataSheetChunks(
   offset: number,
   limit: number
 ): Promise<{
@@ -395,7 +395,7 @@ async function populateFichaTecnicaChunks(
 
   // Get SKUs that already have chunks
   const { data: existingChunks } = await chatbot
-    .from("ficha_tecnica_chunks")
+    .from("data_sheet_chunks")
     .select("sku");
 
   const existingSkus = new Set(
@@ -404,9 +404,9 @@ async function populateFichaTecnicaChunks(
 
   // Get meds with fichas that need processing
   const { data: allMeds } = await admin
-    .from("medicamentos")
-    .select("sku, ficha_tecnica_url")
-    .not("ficha_tecnica_url", "is", null)
+    .from("medications")
+    .select("sku, data_sheet_url")
+    .not("data_sheet_url", "is", null)
     .order("sku");
 
   if (!allMeds || allMeds.length === 0) {
@@ -424,14 +424,14 @@ async function populateFichaTecnicaChunks(
   }
 
   console.log(
-    `Processing fichas ${offset}–${offset + page.length} of ${total} pending`
+    `Processing data sheets ${offset}–${offset + page.length} of ${total} pending`
   );
 
   let processed = 0;
 
   for (const med of page) {
     const sku = med.sku as string;
-    const url = med.ficha_tecnica_url as string;
+    const url = med.data_sheet_url as string;
 
     try {
       let filePath = url;
@@ -497,7 +497,7 @@ async function populateFichaTecnicaChunks(
         }));
 
         const { error: insertErr } = await chatbot
-          .from("ficha_tecnica_chunks")
+          .from("data_sheet_chunks")
           .upsert(rows, { onConflict: "sku,chunk_index" });
 
         if (insertErr) {
@@ -567,9 +567,9 @@ Deno.serve(async (req: Request) => {
     let result: Record<string, unknown>;
 
     if (mode === "medicamentos") {
-      result = await populateMedicamentoEmbeddings(offset, limit);
+      result = await populateMedicationEmbeddings(offset, limit);
     } else if (mode === "fichas") {
-      result = await populateFichaTecnicaChunks(offset, limit);
+      result = await populateDataSheetChunks(offset, limit);
     } else {
       return new Response(
         JSON.stringify({

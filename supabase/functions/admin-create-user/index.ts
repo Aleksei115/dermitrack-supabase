@@ -6,13 +6,13 @@ type CreatePayload = {
   is_usuario?: string;
   user_metadata?: Record<string, unknown>;
   perfil?: {
-    id_usuario?: string;
-    nombre?: string;
+    user_id?: string;
+    name?: string;
     email?: string;
     password?: string;
-    rol?: string;
-    activo?: boolean;
-    fecha_creacion?: string;
+    role?: string;
+    active?: boolean;
+    created_date?: string;
     auth_user_id?: string;
     id_zoho?: string;  // ID de Zoho CRM para futura integracion
   };
@@ -20,8 +20,8 @@ type CreatePayload = {
 
 type CallerInfo = {
   auth_user_id: string;
-  rol: string;
-  nombre: string;
+  role: string;
+  name: string;
 };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -61,10 +61,10 @@ async function getCallerInfo(authHeader: string | null): Promise<CallerInfo | nu
 
   if (error || !user) return null;
 
-  // Get user's role from usuarios table
+  // Get user's role from users table
   const { data: usuario, error: userError } = await supabase
-    .from("usuarios")
-    .select("rol, nombre")
+    .from("users")
+    .select("role, name")
     .eq("auth_user_id", user.id)
     .single();
 
@@ -72,12 +72,12 @@ async function getCallerInfo(authHeader: string | null): Promise<CallerInfo | nu
 
   return {
     auth_user_id: user.id,
-    rol: usuario.rol,
-    nombre: usuario.nombre,
+    role: usuario.role,
+    name: usuario.name,
   };
 }
 
-function defaultNombreFromEmail(email: string) {
+function defaultNameFromEmail(email: string) {
   const local = email.split("@")[0] || "Usuario";
   return local.replace(/[._-]+/g, " ").trim();
 }
@@ -142,12 +142,12 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "No autorizado" }, 401);
     }
 
-    if (!["OWNER", "ADMINISTRADOR"].includes(caller.rol)) {
-      log("forbidden - caller is not OWNER or ADMINISTRADOR", { rol: caller.rol });
+    if (!["OWNER", "ADMIN"].includes(caller.role)) {
+      log("forbidden - caller is not OWNER or ADMINISTRADOR", { role: caller.role });
       return jsonResponse({ error: "Acceso denegado. Solo OWNER o ADMINISTRADOR pueden realizar esta accion." }, 403);
     }
 
-    log("caller verified", { rol: caller.rol, nombre: caller.nombre });
+    log("caller verified", { role: caller.role, name: caller.name });
 
     let body: CreatePayload;
     try {
@@ -215,13 +215,13 @@ Deno.serve(async (req) => {
 
     log("checking existing link by auth_user_id", { authId });
     const { data: existingByAuth, error: authLinkErr } = await supabase
-      .from("usuarios")
-      .select("id_usuario, email, auth_user_id")
+      .from("users")
+      .select("user_id, email, auth_user_id")
       .eq("auth_user_id", authId)
       .maybeSingle();
 
     if (authLinkErr) {
-      log("usuarios lookup by auth_user_id failed", authLinkErr);
+      log("users lookup by auth_user_id failed", authLinkErr);
       return jsonResponse(
         {
           id: authId,
@@ -233,7 +233,7 @@ Deno.serve(async (req) => {
     }
 
     if (existingByAuth && existingByAuth.email !== authEmail) {
-      log("auth_user_id already linked to another usuario", existingByAuth);
+      log("auth_user_id already linked to another user", existingByAuth);
       return jsonResponse(
         {
           error: "auth_user_id ya está ligado a otro usuario",
@@ -247,13 +247,13 @@ Deno.serve(async (req) => {
 
     log("looking for existing perfil", { authEmail });
     const { data: existing, error: findErr } = await supabase
-      .from("usuarios")
-      .select("id_usuario, auth_user_id")
+      .from("users")
+      .select("user_id, auth_user_id")
       .eq("email", authEmail)
       .maybeSingle();
 
     if (findErr) {
-      log("usuarios lookup failed", findErr);
+      log("users lookup failed", findErr);
       return jsonResponse(
         {
           id: authId,
@@ -280,24 +280,24 @@ Deno.serve(async (req) => {
         );
       }
 
-      log("linking existing usuario", { authEmail });
+      log("linking existing user", { authEmail });
       const { data: updated, error: updErr } = await supabase
-        .from("usuarios")
+        .from("users")
         .update({ auth_user_id: authId })
         .eq("email", authEmail)
         .is("auth_user_id", null)
-        .select("id_usuario, auth_user_id, email")
+        .select("user_id, auth_user_id, email")
         .maybeSingle();
 
       if (updErr) {
-        log("usuarios update failed", updErr);
+        log("users update failed", updErr);
         return jsonResponse(
           { id: authId, email: authEmail, link_error: updErr.message },
           201,
         );
       }
       if (!updated) {
-        log("usuarios update affected 0 rows", { authEmail });
+        log("users update affected 0 rows", { authEmail });
         return jsonResponse(
           { id: authId, email: authEmail, link_error: "No se pudo linkear" },
           409,
@@ -305,7 +305,7 @@ Deno.serve(async (req) => {
       }
 
       return jsonResponse(
-        { id: authId, email: authEmail, linked_usuario_email: authEmail },
+        { id: authId, email: authEmail, linked_user_email: authEmail },
         201,
       );
     }
@@ -315,8 +315,8 @@ Deno.serve(async (req) => {
     // Validate id_zoho uniqueness if provided
     if (perfil.id_zoho) {
       const { data: existingZoho, error: zohoError } = await supabase
-        .from("usuarios")
-        .select("id_usuario")
+        .from("users")
+        .select("user_id")
         .eq("id_zoho", perfil.id_zoho)
         .maybeSingle();
 
@@ -331,33 +331,33 @@ Deno.serve(async (req) => {
       if (existingZoho) {
         log("id_zoho already exists", { id_zoho: perfil.id_zoho });
         return jsonResponse(
-          { error: "El id_zoho ya esta registrado para otro usuario", existing_id: existingZoho.id_usuario },
+          { error: "El id_zoho ya esta registrado para otro usuario", existing_id: existingZoho.user_id },
           409,
         );
       }
     }
 
     const insertRow = {
-      id_usuario: perfil.id_usuario ?? authId,
-      nombre: perfil.nombre ?? defaultNombreFromEmail(authEmail),
+      user_id: perfil.user_id ?? authId,
+      name: perfil.name ?? defaultNameFromEmail(authEmail),
       email: authEmail,
       password: perfil.password ?? "DISABLED",
-      rol: perfil.rol ?? "USUARIO",
-      activo: perfil.activo ?? true,
-      fecha_creacion: perfil.fecha_creacion ?? new Date().toISOString(),
+      role: perfil.role ?? "USUARIO",
+      active: perfil.active ?? true,
+      created_date: perfil.created_date ?? new Date().toISOString(),
       auth_user_id: authId,
       id_zoho: perfil.id_zoho ?? null,
     };
 
-    log("inserting new usuario", { email: authEmail, id_usuario: insertRow.id_usuario });
+    log("inserting new user", { email: authEmail, user_id: insertRow.user_id });
     const { data: inserted, error: insErr } = await supabase
-      .from("usuarios")
+      .from("users")
       .insert(insertRow)
       .select("*")
       .single();
 
     if (insErr) {
-      log("usuarios insert failed", insErr);
+      log("users insert failed", insErr);
       return jsonResponse(
         {
           id: authId,

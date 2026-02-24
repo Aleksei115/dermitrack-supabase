@@ -1,16 +1,16 @@
 // Supabase Edge Function: seed-missing-auth-users
-// Crea cuentas en auth.users para filas en public.usuarios cuyo auth_user_id no existe en auth.users
+// Crea cuentas en auth.users para filas en public.users cuyo auth_user_id no existe en auth.users
 // Requisitos:
 // - Variables de entorno disponibles: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-// - Tabla public.usuarios con columnas: id (pk), email (text), nombre (opcional), auth_user_id (uuid nullable)
-// - RLS permitiendo al service role leer/actualizar public.usuarios (service role bypass RLS)
+// - Tabla public.users con columnas: id (pk), email (text), nombre (opcional), auth_user_id (uuid nullable)
+// - RLS permitiendo al service role leer/actualizar public.users (service role bypass RLS)
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
-interface Usuario {
+interface User {
   id: string | number;
   email: string | null;
-  nombre?: string | null;
+  name?: string | null;
   auth_user_id: string | null;
 }
 
@@ -32,15 +32,15 @@ Deno.serve(async (req: Request) => {
 
     // 1) Seleccionar solo los usuarios cuyo auth_user_id no existe en auth.users
     const { data: candidates, error: selErr } = await admin
-      .from('usuarios')
-      .select('id, email, nombre, auth_user_id')
+      .from('users')
+      .select('id, email, name, auth_user_id')
       .not('auth_user_id', 'is', null);
 
     if (selErr) throw selErr;
 
     // Filtrar en memoria los que realmente faltan en auth.users para minimizar roundtrips
     // Construir set de auth_user_id distintos
-    const ids = Array.from(new Set((candidates || []).map((u: Usuario) => u.auth_user_id).filter(Boolean))) as string[];
+    const ids = Array.from(new Set((candidates || []).map((u: User) => u.auth_user_id).filter(Boolean))) as string[];
 
     const missing = new Set<string>();
     if (ids.length > 0) {
@@ -62,14 +62,14 @@ Deno.serve(async (req: Request) => {
     }
 
     // Filtrar candidatos por los realmente faltantes
-    const targets: Usuario[] = (candidates || []).filter((u: Usuario) => u.auth_user_id && missing.has(u.auth_user_id));
+    const targets: User[] = (candidates || []).filter((u: User) => u.auth_user_id && missing.has(u.auth_user_id));
 
     if (!targets.length) {
       return new Response(JSON.stringify({ created: 0, message: 'No hay usuarios pendientes' }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     let created = 0;
-    const errors: Array<{ id: Usuario['id']; reason: string }> = [];
+    const errors: Array<{ id: User['id']; reason: string }> = [];
 
     for (const u of targets) {
       // Validar email
@@ -85,7 +85,7 @@ Deno.serve(async (req: Request) => {
         email,
         password: tempPassword,
         email_confirm: true,
-        user_metadata: { nombre: u.nombre ?? null, source: 'seed-missing-auth-users' },
+        user_metadata: { name: u.name ?? null, source: 'seed-missing-auth-users' },
       });
       if (cErr || !createdUser?.user?.id) {
         errors.push({ id: u.id, reason: cErr?.message || 'Fallo al crear usuario' });
@@ -93,8 +93,8 @@ Deno.serve(async (req: Request) => {
       }
 
       const newId = createdUser.user.id;
-      // Actualizar public.usuarios con el nuevo auth_user_id
-      const { error: upErr } = await admin.from('usuarios').update({ auth_user_id: newId }).eq('id', u.id);
+      // Actualizar public.users con el nuevo auth_user_id
+      const { error: upErr } = await admin.from('users').update({ auth_user_id: newId }).eq('id', u.id);
       if (upErr) {
         errors.push({ id: u.id, reason: upErr.message });
         continue;

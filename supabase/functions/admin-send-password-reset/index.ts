@@ -9,13 +9,13 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
  */
 
 type ResetPayload = {
-  id_usuario: string;  // ID del usuario en tabla usuarios
+  user_id: string;  // ID del usuario en tabla usuarios
 };
 
 type CallerInfo = {
   auth_user_id: string;
-  rol: string;
-  nombre: string;
+  role: string;
+  name: string;
 };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -71,27 +71,27 @@ async function getCallerInfo(authHeader: string | null, log: (msg: string, extra
   log("getCallerInfo: user found", { id: user.id, email: user.email });
 
   const { data: usuario, error: userError } = await supabaseAdmin
-    .from("usuarios")
-    .select("rol, nombre")
+    .from("users")
+    .select("role, name")
     .eq("auth_user_id", user.id)
     .single();
 
   if (userError) {
-    log("getCallerInfo: usuarios query error", { message: userError.message, code: userError.code });
+    log("getCallerInfo: users query error", { message: userError.message, code: userError.code });
     return null;
   }
 
   if (!usuario) {
-    log("getCallerInfo: no usuario found for auth_user_id", user.id);
+    log("getCallerInfo: no user found for auth_user_id", user.id);
     return null;
   }
 
-  log("getCallerInfo: caller info found", { rol: usuario.rol, nombre: usuario.nombre });
+  log("getCallerInfo: caller info found", { role: usuario.role, name: usuario.name });
 
   return {
     auth_user_id: user.id,
-    rol: usuario.rol,
-    nombre: usuario.nombre,
+    role: usuario.role,
+    name: usuario.name,
   };
 }
 
@@ -106,7 +106,7 @@ async function logAudit(
       action,
       target_user_id: targetUserId,
       performed_by: performedBy.auth_user_id,
-      performed_by_name: performedBy.nombre,
+      performed_by_name: performedBy.name,
       details: JSON.stringify(details),
       created_at: new Date().toISOString(),
     });
@@ -155,12 +155,12 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "No autorizado" }, 401);
     }
 
-    if (!["OWNER", "ADMINISTRADOR"].includes(caller.rol)) {
-      log("forbidden - caller is not OWNER or ADMINISTRADOR", { rol: caller.rol });
+    if (!["OWNER", "ADMIN"].includes(caller.role)) {
+      log("forbidden - caller is not OWNER or ADMINISTRADOR", { role: caller.role });
       return jsonResponse({ error: "Acceso denegado. Solo OWNER o ADMINISTRADOR pueden realizar esta accion." }, 403);
     }
 
-    log("caller verified", { rol: caller.rol, nombre: caller.nombre });
+    log("caller verified", { role: caller.role, name: caller.name });
 
     let body: ResetPayload;
     try {
@@ -169,22 +169,22 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "JSON invalido" }, 400);
     }
 
-    const { id_usuario } = body;
+    const { user_id } = body;
 
-    if (!id_usuario) {
-      return jsonResponse({ error: "id_usuario es obligatorio" }, 400);
+    if (!user_id) {
+      return jsonResponse({ error: "user_id es obligatorio" }, 400);
     }
 
-    log("processing request", { id_usuario });
+    log("processing request", { user_id });
 
     const { data: targetUser, error: targetError } = await supabaseAdmin
-      .from("usuarios")
-      .select("id_usuario, nombre, email, auth_user_id")
-      .eq("id_usuario", id_usuario)
+      .from("users")
+      .select("user_id, name, email, auth_user_id")
+      .eq("user_id", user_id)
       .single();
 
     if (targetError || !targetUser) {
-      log("target user not found", { id_usuario, error: targetError });
+      log("target user not found", { user_id, error: targetError });
       return jsonResponse({ error: "Usuario no encontrado" }, 404);
     }
 
@@ -192,7 +192,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "El usuario no tiene email configurado" }, 400);
     }
 
-    log("target user found", { nombre: targetUser.nombre, email: targetUser.email, auth_user_id: targetUser.auth_user_id });
+    log("target user found", { name: targetUser.name, email: targetUser.email, auth_user_id: targetUser.auth_user_id });
 
     let authUserId = targetUser.auth_user_id;
     let authAccountCreated = false;
@@ -210,16 +210,16 @@ Deno.serve(async (req) => {
       if (existingAuthUser) {
         // Email exists in Auth - check if linked to another user
         const { data: linkedUser } = await supabaseAdmin
-          .from("usuarios")
-          .select("id_usuario, nombre")
+          .from("users")
+          .select("user_id, name")
           .eq("auth_user_id", existingAuthUser.id)
-          .neq("id_usuario", id_usuario)
+          .neq("user_id", user_id)
           .maybeSingle();
 
         if (linkedUser) {
           return jsonResponse({
             error: "El email ya esta vinculado a otro usuario en el sistema",
-            linked_to: linkedUser.nombre
+            linked_to: linkedUser.name
           }, 409);
         }
 
@@ -255,21 +255,21 @@ Deno.serve(async (req) => {
         }, 500);
       }
 
-      // Update usuarios table with auth_user_id
+      // Update users table with auth_user_id
       const { error: updateError } = await supabaseAdmin
-        .from("usuarios")
+        .from("users")
         .update({ auth_user_id: authUserId })
-        .eq("id_usuario", id_usuario);
+        .eq("user_id", user_id);
 
       if (updateError) {
-        log("failed to update auth_user_id in usuarios", updateError);
+        log("failed to update auth_user_id in users", updateError);
         return jsonResponse({
           error: "No se pudo vincular la cuenta de autenticacion",
           details: updateError.message
         }, 500);
       }
 
-      log("auth_user_id linked to usuario", { id_usuario, authUserId });
+      log("auth_user_id linked to user", { user_id, authUserId });
     }
 
     // Send password reset email
@@ -292,11 +292,11 @@ Deno.serve(async (req) => {
     // Log audit
     await logAudit(
       authAccountCreated ? "CREATE_AUTH_AND_SEND_RESET" : "SEND_PASSWORD_RESET",
-      id_usuario,
+      user_id,
       caller,
       {
         target_email: targetUser.email,
-        target_nombre: targetUser.nombre,
+        target_name: targetUser.name,
         auth_account_created: authAccountCreated,
       }
     );
@@ -307,8 +307,8 @@ Deno.serve(async (req) => {
         ? `Cuenta de acceso creada y email de restablecimiento enviado a ${targetUser.email}`
         : `Email de restablecimiento enviado a ${targetUser.email}`,
       user: {
-        id_usuario: targetUser.id_usuario,
-        nombre: targetUser.nombre,
+        user_id: targetUser.user_id,
+        name: targetUser.name,
         email: targetUser.email,
       },
       auth_account_created: authAccountCreated,

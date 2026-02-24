@@ -4,8 +4,8 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 type CallerInfo = {
   auth_user_id: string;
-  rol: string;
-  nombre: string;
+  role: string;
+  name: string;
 };
 
 type RowError = {
@@ -109,8 +109,8 @@ async function getCallerInfo(
   if (error || !user) return null;
 
   const { data: usuario, error: userError } = await supabase
-    .from("usuarios")
-    .select("rol, nombre")
+    .from("users")
+    .select("role, name")
     .eq("auth_user_id", user.id)
     .single();
 
@@ -118,8 +118,8 @@ async function getCallerInfo(
 
   return {
     auth_user_id: user.id,
-    rol: usuario.rol,
-    nombre: usuario.nombre,
+    role: usuario.role,
+    name: usuario.name,
   };
 }
 
@@ -234,20 +234,20 @@ async function loadClientMapping(): Promise<{
   const normalMap = new Map<string, string>();
 
   const { data: clientes, error } = await supabase
-    .from("clientes")
-    .select("id_cliente, id_cliente_zoho_botiquin");
+    .from("clients")
+    .select("client_id, zoho_cabinet_client_id");
 
   if (error) {
-    console.error("[import-odv] Error loading clientes:", error.message);
+    console.error("[import-odv] Error loading clients:", error.message);
     return { botiquinMap, normalMap };
   }
 
   for (const c of clientes ?? []) {
-    if (c.id_cliente_zoho_botiquin) {
-      botiquinMap.set(c.id_cliente_zoho_botiquin, c.id_cliente);
+    if (c.client_id_zoho_botiquin) {
+      botiquinMap.set(c.client_id_zoho_botiquin, c.client_id);
     }
-    // id_cliente IS the zoho normal ID (canonical PK)
-    normalMap.set(c.id_cliente, c.id_cliente);
+    // client_id IS the zoho normal ID (canonical PK)
+    normalMap.set(c.client_id, c.client_id);
   }
 
   return { botiquinMap, normalMap };
@@ -319,9 +319,9 @@ function processFile(
         odv_id: odvId,
         fecha,
         sku,
-        id_cliente: botiquinClientId,
-        cantidad,
-        estado_factura: estadoFactura || null,
+        client_id: botiquinClientId,
+        quantity: cantidad,
+        invoice_status: estadoFactura || null,
       });
     } else if (normalClientId) {
       const precio = parsePrecio(precioRaw ?? "");
@@ -329,10 +329,10 @@ function processFile(
         odv_id: odvId,
         fecha,
         sku,
-        id_cliente: normalClientId,
-        cantidad,
-        estado_factura: estadoFactura || null,
-        precio,
+        client_id: normalClientId,
+        quantity: cantidad,
+        invoice_status: estadoFactura || null,
+        price: precio,
       });
     } else {
       result.unmapped.add(codigoCliente);
@@ -348,7 +348,7 @@ function processFile(
 }
 
 async function insertBatch(
-  table: "botiquin_odv" | "ventas_odv",
+  table: "cabinet_odv" | "odv_sales",
   rows: Record<string, unknown>[],
 ): Promise<{ inserted: number; duplicates: number; errors: string[] }> {
   let inserted = 0;
@@ -360,7 +360,7 @@ async function insertBatch(
     const { data, error } = await supabase
       .from(table)
       .upsert(chunk, {
-        onConflict: "odv_id,id_cliente,sku",
+        onConflict: "odv_id,client_id,sku",
         ignoreDuplicates: true,
       })
       .select("id_venta");
@@ -412,7 +412,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "No autorizado" }, 401);
     }
 
-    if (!["OWNER", "ADMINISTRADOR"].includes(caller.rol)) {
+    if (!["OWNER", "ADMIN"].includes(caller.role)) {
       return jsonResponse(
         {
           error:
@@ -422,7 +422,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    log("caller verified", { rol: caller.rol, nombre: caller.nombre });
+    log("caller verified", { role: caller.role, name: caller.name });
 
     // Parse multipart form data
     let formData: FormData;
@@ -514,7 +514,7 @@ Deno.serve(async (req) => {
     let ventasDuplicates = 0;
 
     if (allBotiquinRows.length > 0) {
-      const result = await insertBatch("botiquin_odv", allBotiquinRows);
+      const result = await insertBatch("cabinet_odv", allBotiquinRows);
       botiquinInserted = result.inserted;
       botiquinDuplicates = result.duplicates;
       for (const e of result.errors) {
@@ -523,7 +523,7 @@ Deno.serve(async (req) => {
     }
 
     if (allVentasRows.length > 0) {
-      const result = await insertBatch("ventas_odv", allVentasRows);
+      const result = await insertBatch("odv_sales", allVentasRows);
       ventasInserted = result.inserted;
       ventasDuplicates = result.duplicates;
       for (const e of result.errors) {
