@@ -161,17 +161,21 @@ FROM periods p
 JOIN clients c ON c.client_id::text = p.client_id::text
 GROUP BY p.client_id, c.client_name, c.status;
 
-CREATE OR REPLACE VIEW audit.audit_log AS
-SELECT id, table_name, record_id, action, audit_user_id, "timestamp", values_before, values_after, ip_address, user_agent
-FROM public.audit_log;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'audit') THEN
+    CREATE OR REPLACE VIEW audit.audit_log AS
+    SELECT id, table_name, record_id, action, audit_user_id, "timestamp", values_before, values_after, ip_address, user_agent
+    FROM public.audit_log;
 
-CREATE OR REPLACE VIEW audit.client_status_log AS
-SELECT id, client_id, previous_status, new_status, changed_by, changed_at, reason, metadata, days_in_previous_status
-FROM public.client_status_log;
+    CREATE OR REPLACE VIEW audit.client_status_log AS
+    SELECT id, client_id, previous_status, new_status, changed_by, changed_at, reason, metadata, days_in_previous_status
+    FROM public.client_status_log;
 
-CREATE OR REPLACE VIEW audit.admin_notifications AS
-SELECT id, type, title, message, metadata, read, created_at, for_user, read_at, read_by
-FROM public.admin_notifications;
+    CREATE OR REPLACE VIEW audit.admin_notifications AS
+    SELECT id, type, title, message, metadata, read, created_at, for_user, read_at, read_by
+    FROM public.admin_notifications;
+  END IF;
+END $$;
 
 
 -- ---------------------------------------------------------------------------
