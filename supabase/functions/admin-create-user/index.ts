@@ -310,7 +310,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const perfil = body?.perfil ?? {};
+    const perfil = body?.profile ?? body?.perfil ?? {};
 
     // Validate id_zoho uniqueness if provided
     if (perfil.id_zoho) {
