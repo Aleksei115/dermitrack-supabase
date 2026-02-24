@@ -175,7 +175,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_clasificacion_cliente",
           description:
-            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=solo botiquin, M2=conversion botiquin a ODV, M3=solo ODV. Util para estrategia comercial.",
+            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=venta directa de botiquin (productos vendidos al corte), M2=conversion (productos vendidos en botiquin que luego se volvieron venta recurrente ODV), M3=exposicion (productos que estuvieron en botiquin y luego aparecieron como venta recurrente ODV sin venta directa previa). Util para estrategia comercial.",
           parameters: {
             type: "object",
             properties: {
