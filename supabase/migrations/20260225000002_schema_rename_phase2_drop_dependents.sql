@@ -54,7 +54,11 @@ DROP TRIGGER IF EXISTS validate_saga_items_unique ON saga_transactions;
 DROP TRIGGER IF EXISTS trg_notify_task_status ON visit_tasks;
 DROP TRIGGER IF EXISTS trg_notify_visit_completed ON visitas;
 DROP TRIGGER IF EXISTS trg_sync_saga_status ON visitas;
-DROP TRIGGER IF EXISTS update_encuestas_ciclo_updated_at ON archive.encuestas_ciclo;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    DROP TRIGGER IF EXISTS update_encuestas_ciclo_updated_at ON archive.encuestas_ciclo;
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 4. Drop ALL functions
