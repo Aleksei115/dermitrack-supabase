@@ -1643,7 +1643,7 @@ async function handleStreamingResponse(
         // ── MAX_TOKENS: refund query, don't save, send error ──
         if (hitMaxTokens) {
           // Refund the query that was pre-incremented
-          await chatbot.rpc("refund_usage", {
+          await chatbot.rpc("rollback_usage", {
             p_user_id: user.user_id,
           });
 
