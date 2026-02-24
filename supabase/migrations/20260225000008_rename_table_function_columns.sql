@@ -15,6 +15,7 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 -- 1. clasificacion_base() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.clasificacion_base(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.clasificacion_base(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku character varying, product character varying, "condition" character varying, brand character varying, is_top boolean, m_type text, first_event_date date, cabinet_revenue numeric, odv_revenue numeric, odv_quantity numeric, odv_transaction_count bigint)
  LANGUAGE sql
@@ -88,6 +89,7 @@ AS $function$
   FROM m3_agg m3 JOIN clients c ON c.client_id = m3.client_id JOIN medications m ON m.sku = m3.sku LEFT JOIN sku_padecimiento sp ON sp.sku = m3.sku;
 $function$;
 
+DROP FUNCTION IF EXISTS public.clasificacion_base(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.clasificacion_base(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku character varying, product character varying, "condition" character varying, brand character varying, is_top boolean, m_type text, first_event_date date, cabinet_revenue numeric, odv_revenue numeric, odv_quantity numeric, odv_transaction_count bigint)
  LANGUAGE sql
@@ -100,6 +102,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 2. get_cabinet_impact_summary() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cabinet_impact_summary(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cabinet_impact_summary(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(adoptions integer, revenue_adoptions numeric, conversions integer, revenue_conversions numeric, exposures integer, revenue_exposures numeric, crosssell_pairs integer, revenue_crosssell numeric, total_impact_revenue numeric, total_odv_revenue numeric, impact_percentage numeric)
  LANGUAGE sql
@@ -120,6 +123,7 @@ AS $function$
   FROM m1, m2, m3, total_odv t;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cabinet_impact_summary(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cabinet_impact_summary(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(adoptions integer, revenue_adoptions numeric, conversions integer, revenue_conversions numeric, exposures integer, revenue_exposures numeric, crosssell_pairs integer, revenue_crosssell numeric, total_impact_revenue numeric, total_odv_revenue numeric, impact_percentage numeric)
  LANGUAGE sql
@@ -132,6 +136,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 3. get_impact_detail() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_impact_detail(text, character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_impact_detail(p_metric text, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku character varying, product character varying, quantity integer, price numeric, value numeric, date date, detail text)
  LANGUAGE plpgsql
@@ -204,6 +209,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_impact_detail(text, character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_impact_detail(p_metric text, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku character varying, product character varying, quantity integer, price numeric, value numeric, date date, detail text)
  LANGUAGE sql
@@ -216,6 +222,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 4. get_brand_performance() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_brand_performance(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_brand_performance(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(brand character varying, value numeric, pieces integer)
  LANGUAGE sql
@@ -249,6 +256,7 @@ AS $function$
   ORDER BY valor DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_brand_performance(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_brand_performance(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(brand character varying, value numeric, pieces integer)
  LANGUAGE sql
@@ -261,6 +269,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 5. get_condition_performance() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_condition_performance(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_condition_performance(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, value numeric, pieces integer)
  LANGUAGE sql
@@ -295,6 +304,7 @@ AS $function$
   ORDER BY valor DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_condition_performance(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_condition_performance(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, value numeric, pieces integer)
  LANGUAGE sql
@@ -307,6 +317,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 6. get_product_interest() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_product_interest(integer, character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_product_interest(p_limit integer DEFAULT 15, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(product character varying, sale integer, placement integer, collection integer, active_stock integer)
  LANGUAGE sql
@@ -355,6 +366,7 @@ AS $function$
   LIMIT p_limit;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_product_interest(integer, character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_product_interest(p_limit integer DEFAULT 15, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(product character varying, sale integer, placement integer, collection integer, active_stock integer)
  LANGUAGE sql
@@ -367,6 +379,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 7. get_opportunity_matrix() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_opportunity_matrix(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_opportunity_matrix(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, sale integer, collection integer, valor numeric, converted_qty integer)
  LANGUAGE sql
@@ -424,6 +437,7 @@ AS $function$
   ORDER BY bp.valor DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_opportunity_matrix(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_opportunity_matrix(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, sale integer, collection integer, valor numeric, converted_qty integer)
  LANGUAGE sql
@@ -436,6 +450,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 8. get_yoy_padecimiento() - analytics + public (rename columns only)
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_yoy_padecimiento(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_yoy_padecimiento(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, "year" integer, valor numeric, growth numeric)
  LANGUAGE plpgsql
@@ -488,6 +503,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_yoy_padecimiento(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_yoy_padecimiento(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE("condition" character varying, "year" integer, valor numeric, growth numeric)
  LANGUAGE sql
@@ -500,6 +516,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 9. get_market_analysis() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_market_analysis(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_market_analysis(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, sku character varying, product character varying, brand character varying, "condition" character varying, is_top boolean, sale_pieces bigint, sale_value numeric, placement_pieces bigint, placement_value numeric, collection_pieces bigint, collection_value numeric, active_stock_pieces bigint, m2_conversions bigint, m2_revenue numeric)
  LANGUAGE sql
@@ -562,6 +579,7 @@ AS $function$
   LEFT JOIN cabinet_inventory ib ON ib.client_id = mv.client_id AND ib.sku = mv.sku;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_market_analysis(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_market_analysis(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, sku character varying, product character varying, brand character varying, "condition" character varying, is_top boolean, sale_pieces bigint, sale_value numeric, placement_pieces bigint, placement_value numeric, collection_pieces bigint, collection_value numeric, active_stock_pieces bigint, m2_conversions bigint, m2_revenue numeric)
  LANGUAGE sql
@@ -574,6 +592,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 10. get_billing_composition() - filtered + legacy + public wrappers
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_billing_composition(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_billing_composition(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, current_tier character varying, previous_tier character varying, active boolean, baseline numeric, current_billing numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, growth_pct numeric, linked_pct numeric, linked_value numeric, linked_pieces bigint, linked_skus bigint)
  LANGUAGE sql
@@ -709,6 +728,7 @@ AS $function$
   ORDER BY (COALESCE(c.current_billing, 0) - COALESCE(c.avg_billing, 0)) DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_billing_composition(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_billing_composition(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, current_tier character varying, previous_tier character varying, active boolean, baseline numeric, current_billing numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, growth_pct numeric, linked_pct numeric, linked_value numeric, linked_pieces bigint, linked_skus bigint)
  LANGUAGE sql
@@ -717,6 +737,7 @@ CREATE OR REPLACE FUNCTION public.get_billing_composition(p_doctors character va
 AS $function$ SELECT * FROM analytics.get_billing_composition(p_doctors, p_brands, p_conditions, p_start_date, p_end_date); $function$;
 
 -- Legacy (no-args) version
+DROP FUNCTION IF EXISTS analytics.get_billing_composition_legacy() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_billing_composition_legacy()
  RETURNS TABLE(client_id character varying, client_name character varying, current_tier character varying, active boolean, baseline numeric, current_billing numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, growth_pct numeric, linked_pct numeric, linked_value numeric, linked_pieces bigint, linked_skus bigint)
  LANGUAGE sql
@@ -830,6 +851,7 @@ AS $function$
   ORDER BY (COALESCE(c.current_billing, 0) - COALESCE(c.avg_billing, 0)) DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_billing_composition() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_billing_composition()
  RETURNS TABLE(client_id character varying, client_name character varying, current_tier character varying, active boolean, baseline numeric, current_billing numeric, current_m1 numeric, current_m2 numeric, current_m3 numeric, current_unlinked numeric, growth_pct numeric, linked_pct numeric, linked_value numeric, linked_pieces bigint, linked_skus bigint)
  LANGUAGE sql
@@ -840,6 +862,7 @@ AS $function$ SELECT * FROM analytics.get_billing_composition_legacy(); $functio
 -- ---------------------------------------------------------------------------
 -- 11. get_sankey_conversion_flows() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_sankey_conversion_flows(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_sankey_conversion_flows(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku text, product text, category text, odv_value numeric, odv_quantity numeric, transaction_count bigint)
  LANGUAGE sql
@@ -852,6 +875,7 @@ AS $function$
   WHERE b.m_type IN ('M2', 'M3');
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_sankey_conversion_flows(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_sankey_conversion_flows(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(client_id character varying, client_name character varying, sku text, product text, category text, odv_value numeric, odv_quantity numeric, transaction_count bigint)
  LANGUAGE sql
@@ -864,6 +888,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- 12. get_conversion_details() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_conversion_details(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_conversion_details(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(m_type text, client_id character varying, client_name character varying, sku character varying, product character varying, cabinet_date date, first_odv_date date, conversion_days integer, odv_sale_count bigint, total_pieces bigint, generated_value numeric, cabinet_value numeric)
  LANGUAGE sql
@@ -883,6 +908,7 @@ AS $function$
   ORDER BY b.odv_revenue DESC;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_conversion_details(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_conversion_details(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(m_type text, client_id character varying, client_name character varying, sku character varying, product character varying, cabinet_date date, first_odv_date date, conversion_days integer, odv_sale_count bigint, total_pieces bigint, generated_value numeric, cabinet_value numeric)
  LANGUAGE sql
@@ -893,6 +919,7 @@ AS $function$ SELECT * FROM analytics.get_conversion_details(p_doctors, p_brands
 -- ---------------------------------------------------------------------------
 -- 13. get_conversion_metrics() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_conversion_metrics(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_conversion_metrics(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(total_adoptions bigint, total_conversions bigint, generated_value numeric, cabinet_value numeric)
  LANGUAGE sql
@@ -906,6 +933,7 @@ AS $function$
          COALESCE((SELECT SUM(cabinet_revenue) FROM base WHERE m_type = 'M2'), 0)::numeric;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_conversion_metrics(character varying[], character varying[], character varying[], date, date) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_conversion_metrics(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[], p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date)
  RETURNS TABLE(total_adoptions bigint, total_conversions bigint, generated_value numeric, cabinet_value numeric)
  LANGUAGE sql
@@ -916,6 +944,7 @@ AS $function$ SELECT * FROM analytics.get_conversion_metrics(p_doctors, p_brands
 -- ---------------------------------------------------------------------------
 -- 14. get_cutoff_general_stats_with_comparison() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cutoff_general_stats_with_comparison() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_general_stats_with_comparison()
  RETURNS TABLE(start_date date, end_date date, cutoff_days integer, total_doctors_visited integer, total_movements integer, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, doctors_with_sales integer, doctors_without_sales integer, previous_sale_value numeric, previous_placement_value numeric, previous_collection_value numeric, previous_avg_per_doctor numeric, sale_change_pct numeric, placement_change_pct numeric, collection_change_pct numeric, avg_change_pct numeric)
  LANGUAGE plpgsql
@@ -1040,6 +1069,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_general_stats_with_comparison() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_general_stats_with_comparison()
  RETURNS TABLE(start_date date, end_date date, cutoff_days integer, total_doctors_visited integer, total_movements integer, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, doctors_with_sales integer, doctors_without_sales integer, previous_sale_value numeric, previous_placement_value numeric, previous_collection_value numeric, previous_avg_per_doctor numeric, sale_change_pct numeric, placement_change_pct numeric, collection_change_pct numeric, avg_change_pct numeric)
  LANGUAGE sql
@@ -1050,6 +1080,7 @@ AS $function$ SELECT * FROM analytics.get_cutoff_general_stats_with_comparison()
 -- ---------------------------------------------------------------------------
 -- 15. get_cutoff_stats_by_doctor() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cutoff_stats_by_doctor() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_stats_by_doctor()
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, sold_skus text, placed_skus text, collected_skus text, has_sale boolean)
  LANGUAGE plpgsql
@@ -1098,6 +1129,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_stats_by_doctor() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_stats_by_doctor()
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, sold_skus text, placed_skus text, collected_skus text, has_sale boolean)
  LANGUAGE sql
@@ -1108,6 +1140,7 @@ AS $function$ SELECT * FROM analytics.get_cutoff_stats_by_doctor(); $function$;
 -- ---------------------------------------------------------------------------
 -- 16. get_cutoff_stats_by_doctor_with_comparison() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cutoff_stats_by_doctor_with_comparison() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_stats_by_doctor_with_comparison()
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, sold_skus text, has_sale boolean, previous_sale_value numeric, change_pct numeric)
  LANGUAGE plpgsql
@@ -1146,6 +1179,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_stats_by_doctor_with_comparison() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_stats_by_doctor_with_comparison()
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, sale_pieces integer, placement_pieces integer, collection_pieces integer, sale_value numeric, placement_value numeric, collection_value numeric, sold_skus text, has_sale boolean, previous_sale_value numeric, change_pct numeric)
  LANGUAGE sql
@@ -1156,6 +1190,7 @@ AS $function$ SELECT * FROM analytics.get_cutoff_stats_by_doctor_with_comparison
 -- ---------------------------------------------------------------------------
 -- 17. get_cutoff_skus_value_per_visit() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cutoff_skus_value_per_visit(character varying, character varying) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_skus_value_per_visit(p_client_id character varying DEFAULT NULL::character varying, p_brand character varying DEFAULT NULL::character varying)
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, unique_skus integer, sale_value numeric, brand character varying)
  LANGUAGE plpgsql
@@ -1189,6 +1224,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_skus_value_per_visit(character varying, character varying) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_skus_value_per_visit(p_client_id character varying DEFAULT NULL::character varying, p_brand character varying DEFAULT NULL::character varying)
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, unique_skus integer, sale_value numeric, brand character varying)
  LANGUAGE sql
@@ -1199,6 +1235,7 @@ AS $function$ SELECT * FROM analytics.get_cutoff_skus_value_per_visit(p_client_i
 -- ---------------------------------------------------------------------------
 -- 18. get_available_filters() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_available_filters() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_available_filters()
  RETURNS TABLE(brands character varying[], doctors jsonb, conditions character varying[], first_placement_date date)
  LANGUAGE plpgsql
@@ -1219,6 +1256,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_available_filters() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_available_filters()
  RETURNS TABLE(brands character varying[], doctors jsonb, conditions character varying[], first_placement_date date)
  LANGUAGE sql
@@ -1229,6 +1267,7 @@ AS $function$ SELECT * FROM analytics.get_available_filters(); $function$;
 -- ---------------------------------------------------------------------------
 -- 19. get_historical_conversions_evolution() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_historical_conversions_evolution(date, date, text, character varying[], character varying[], character varying[]) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_historical_conversions_evolution(p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date, p_grouping text DEFAULT 'day'::text, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[])
  RETURNS TABLE(date_group date, date_label text, total_pairs integer, cabinet_pairs integer, direct_pairs integer, total_value numeric, cabinet_value numeric, direct_value numeric, transaction_count integer, client_count integer)
  LANGUAGE plpgsql
@@ -1298,6 +1337,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_historical_conversions_evolution(date, date, text, character varying[], character varying[], character varying[]) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_historical_conversions_evolution(p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date, p_grouping text DEFAULT 'day'::text, p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[])
  RETURNS TABLE(date_group date, date_label text, total_pairs integer, cabinet_pairs integer, direct_pairs integer, total_value numeric, cabinet_value numeric, direct_value numeric, transaction_count integer, client_count integer)
  LANGUAGE sql
@@ -1308,6 +1348,7 @@ AS $function$ SELECT * FROM analytics.get_historical_conversions_evolution(p_sta
 -- ---------------------------------------------------------------------------
 -- 20. get_historical_skus_value_per_visit() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_historical_skus_value_per_visit(date, date, character varying) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_historical_skus_value_per_visit(p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date, p_client_id character varying DEFAULT NULL::character varying)
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, unique_skus integer, sale_value numeric, sale_pieces integer)
  LANGUAGE plpgsql
@@ -1346,6 +1387,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_historical_skus_value_per_visit(date, date, character varying) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_historical_skus_value_per_visit(p_start_date date DEFAULT NULL::date, p_end_date date DEFAULT NULL::date, p_client_id character varying DEFAULT NULL::character varying)
  RETURNS TABLE(client_id character varying, client_name character varying, visit_date date, unique_skus integer, sale_value numeric, sale_pieces integer)
  LANGUAGE sql
@@ -1357,6 +1399,7 @@ AS $function$ SELECT * FROM analytics.get_historical_skus_value_per_visit(p_star
 -- 21. get_cutoff_logistics_detail() - analytics + public
 -- ---------------------------------------------------------------------------
 -- Note: get_cutoff_logistics_data() is a large function; only renaming RETURNS TABLE columns
+DROP FUNCTION IF EXISTS analytics.get_cutoff_logistics_data(character varying[], character varying[], character varying[]) CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_logistics_data(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[])
  RETURNS TABLE(advisor_name text, client_name character varying, client_id character varying, visit_date text, sku character varying, product character varying, placed_quantity integer, sale_qty integer, collection_qty integer, total_cutoff integer, destino text, saga_status text, odv_cabinet text, odv_sale text, collection_id uuid, collection_status text, evidence_paths text[], signature_path text, observations text, received_by text)
  LANGUAGE plpgsql
@@ -1510,6 +1553,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_logistics_data(character varying[], character varying[], character varying[]) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_logistics_data(p_doctors character varying[] DEFAULT NULL::character varying[], p_brands character varying[] DEFAULT NULL::character varying[], p_conditions character varying[] DEFAULT NULL::character varying[])
  RETURNS TABLE(advisor_name text, client_name character varying, client_id character varying, visit_date text, sku character varying, product character varying, placed_quantity integer, sale_qty integer, collection_qty integer, total_cutoff integer, destino text, saga_status text, odv_cabinet text, odv_sale text, collection_id uuid, collection_status text, evidence_paths text[], signature_path text, observations text, received_by text)
  LANGUAGE sql
@@ -1520,6 +1564,7 @@ AS $function$
 $function$;
 
 -- get_cutoff_logistics_detail() - rename columns only (same body)
+DROP FUNCTION IF EXISTS analytics.get_cutoff_logistics_detail() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cutoff_logistics_detail()
  RETURNS TABLE(advisor_name text, client_name text, client_id text, visit_date date, sku text, product text, placed_quantity integer, sale_qty integer, collection_qty integer, total_cutoff integer, destino text, saga_status text, odv_cabinet text, odv_sale text, collection_id text, collection_status text, evidence_paths text[], signature_path text, observations text, received_by text)
  LANGUAGE plpgsql
@@ -1632,6 +1677,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cutoff_logistics_detail() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cutoff_logistics_detail()
  RETURNS TABLE(advisor_name text, client_name text, client_id text, visit_date date, sku text, product text, placed_quantity integer, sale_qty integer, collection_qty integer, total_cutoff integer, destino text, saga_status text, odv_cabinet text, odv_sale text, collection_id text, collection_status text, evidence_paths text[], signature_path text, observations text, received_by text)
  LANGUAGE sql
@@ -1642,6 +1688,7 @@ AS $function$ SELECT * FROM analytics.get_cutoff_logistics_detail(); $function$;
 -- ---------------------------------------------------------------------------
 -- 22. get_cabinet_data() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_cabinet_data() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_cabinet_data()
  RETURNS TABLE(sku character varying, movement_id bigint, movement_type text, quantity integer, movement_date text, batch_id text, intake_date text, initial_quantity integer, available_quantity integer, client_id character varying, client_name character varying, tier character varying, avg_billing numeric, total_billing numeric, product character varying, price numeric, brand character varying, top boolean, "condition" character varying)
  LANGUAGE plpgsql
@@ -1679,6 +1726,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_cabinet_data() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_cabinet_data()
  RETURNS TABLE(sku character varying, movement_id bigint, movement_type text, quantity integer, movement_date text, batch_id text, intake_date text, initial_quantity integer, available_quantity integer, client_id character varying, client_name character varying, tier character varying, avg_billing numeric, total_billing numeric, product character varying, price numeric, brand character varying, top boolean, "condition" character varying)
  LANGUAGE sql
@@ -1689,6 +1737,7 @@ AS $function$ SELECT * FROM analytics.get_cabinet_data(); $function$;
 -- ---------------------------------------------------------------------------
 -- 23. get_balance_metrics() - analytics + public
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS analytics.get_balance_metrics() CASCADE;
 CREATE OR REPLACE FUNCTION analytics.get_balance_metrics()
  RETURNS TABLE(concept text, created_value numeric, sales_value numeric, collection_value numeric, holding_inbound_value numeric, holding_virtual_value numeric, calculated_total_value numeric, difference numeric)
  LANGUAGE plpgsql
@@ -1733,6 +1782,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_balance_metrics() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_balance_metrics()
  RETURNS TABLE(concept text, created_value numeric, sales_value numeric, collection_value numeric, holding_inbound_value numeric, holding_virtual_value numeric, calculated_total_value numeric, difference numeric)
  LANGUAGE sql
