@@ -137,7 +137,7 @@ const TOOL_DECLARATIONS = {
           },
         },
         {
-          name: "get_inventario_doctor",
+          name: "get_doctor_inventory",
           description:
             "Obtiene el inventario actual del botiquin de un medico especifico. Muestra SKUs, cantidades y precios. Requiere client_id (obtenido via search_clientes).",
           parameters: {
@@ -152,7 +152,7 @@ const TOOL_DECLARATIONS = {
           },
         },
         {
-          name: "get_movimientos_doctor",
+          name: "get_doctor_movements",
           description:
             "Obtiene historial de movimientos de un medico: creaciones, ventas, recolecciones del botiquin y/o ventas recurrentes ODV. Util para tendencias y analisis historico.",
           parameters: {
@@ -193,7 +193,7 @@ const TOOL_DECLARATIONS = {
           },
         },
         {
-          name: "get_ventas_odv_usuario",
+          name: "get_user_odv_sales",
           description:
             "Obtiene ventas ODV (recurrentes) de TODOS los clientes del usuario actual. Usa para ver el portafolio completo de ventas recurrentes del asesor.",
           parameters: {
@@ -383,7 +383,7 @@ const TOOL_DECLARATIONS = {
           },
         },
         {
-          name: "get_precios_medicamentos",
+          name: "get_medication_prices",
           description:
             "Busca precios de medicamentos por nombre, SKU, o descripcion. Incluye fecha de ultima actualizacion del precio.",
           parameters: {
@@ -615,7 +615,7 @@ async function executeTool(
         const query = args.query as string;
         const idCliente = (args.client_id as string) ?? null;
         const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
-        const { data, error } = await chatbot.rpc("match_medicamentos", {
+        const { data, error } = await chatbot.rpc("match_medications", {
           query_embedding: JSON.stringify(embedding),
           match_threshold: 0.55,
           match_count: idCliente ? 25 : 10, // fetch more when filtering
@@ -631,15 +631,15 @@ async function executeTool(
 
           // Fetch exclusion data + global sales in parallel
           const [invRes, clasifRes, rankingRes] = await Promise.all([
-            chatbot.rpc("get_inventario_doctor", {
+            chatbot.rpc("get_doctor_inventory", {
               p_client_id: idCliente,
               p_user_id: userId,
               p_is_admin: true,
             }),
-            chatbot.rpc("clasificacion_por_cliente", {
+            chatbot.rpc("classification_by_client", {
               p_client_id: idCliente,
             }),
-            chatbot.rpc("get_ranking_ventas_completo", { p_limite: 200 }),
+            chatbot.rpc("get_complete_sales_ranking", { p_limite: 200 }),
           ]);
 
           // 1. Exclude current inventory
@@ -679,7 +679,7 @@ async function executeTool(
               const salesInfo = sales
                 ? `| Ventas globales: ${sales.piezas_totales}pz $${sales.ventas_totales} (M1:$${sales.ventas_botiquin} M2:$${sales.ventas_conversion} M3:$${sales.ventas_exposicion})`
                 : "| Sin historial de ventas global";
-              return `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.padecimientos || "N/A"} ${salesInfo}`;
+              return `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.conditions || "N/A"} ${salesInfo}`;
             })
             .join("\n");
         }
@@ -687,7 +687,7 @@ async function executeTool(
         return results
           .map(
             (m) =>
-              `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.padecimientos || "N/A"}`
+              `${m.sku}: ${m.description} (${m.brand}) $${m.price} | ${m.content ?? ""} | Padecimientos: ${m.conditions || "N/A"}`
           )
           .join("\n");
       }
@@ -695,7 +695,7 @@ async function executeTool(
       case "search_fichas_tecnicas": {
         const query = args.query as string;
         const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
-        const { data, error } = await chatbot.rpc("match_fichas", {
+        const { data, error } = await chatbot.rpc("match_data_sheets", {
           query_embedding: JSON.stringify(embedding),
           match_threshold: 0.60,
           match_count: 3,
@@ -710,7 +710,7 @@ async function executeTool(
 
       case "search_clientes": {
         const nombre = args.name as string;
-        const { data, error } = await chatbot.rpc("fuzzy_search_clientes", {
+        const { data, error } = await chatbot.rpc("fuzzy_search_clients", {
           p_search: nombre,
           p_user_id: null,
           p_limit: 5,
@@ -725,9 +725,9 @@ async function executeTool(
           .join("\n");
       }
 
-      case "get_inventario_doctor": {
+      case "get_doctor_inventory": {
         const idCliente = args.client_id as string;
-        const { data, error } = await chatbot.rpc("get_inventario_doctor", {
+        const { data, error } = await chatbot.rpc("get_doctor_inventory", {
           p_client_id: idCliente,
           p_user_id: userId,
           p_is_admin: isAdmin,
@@ -738,16 +738,16 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (item) =>
-              `${item.sku}: ${item.description} (${item.brand}) | Cant: ${item.quantity_disponible} | $${item.price} | ${item.content ?? ""}`
+              `${item.sku}: ${item.description} (${item.brand}) | Cant: ${item.available_quantity} | $${item.price} | ${item.content ?? ""}`
           )
           .join("\n");
       }
 
-      case "get_movimientos_doctor": {
+      case "get_doctor_movements": {
         const idCliente = args.client_id as string;
         const fuente = (args.fuente as string) ?? "ambos";
         const limite = (args.limite as number) ?? 30;
-        const { data, error } = await chatbot.rpc("get_movimientos_doctor", {
+        const { data, error } = await chatbot.rpc("get_doctor_movements", {
           p_client_id: idCliente,
           p_user_id: userId,
           p_is_admin: true,
@@ -760,7 +760,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (m) =>
-              `[${m.fuente}] ${m.fecha?.substring(0, 10) ?? "?"} | ${m.type}: ${m.sku} - ${m.description} (${m.brand}) x${m.quantity} @ $${m.price ?? 0}`
+              `[${m.fuente}] ${m.date?.substring(0, 10) ?? "?"} | ${m.type}: ${m.sku} - ${m.description} (${m.brand}) x${m.quantity} @ $${m.price ?? 0}`
           )
           .join("\n");
       }
@@ -768,7 +768,7 @@ async function executeTool(
       case "get_clasificacion_cliente": {
         const idCliente = args.client_id as string;
         const { data, error } = await chatbot.rpc(
-          "clasificacion_por_cliente",
+          "classification_by_client",
           { p_client_id: idCliente }
         );
         if (error) return `Error: ${error.message}`;
@@ -779,10 +779,10 @@ async function executeTool(
           .join("\n");
       }
 
-      case "get_ventas_odv_usuario": {
+      case "get_user_odv_sales": {
         const skuFilter = (args.sku_filter as string) ?? null;
         const limite = (args.limite as number) ?? 50;
-        const { data, error } = await chatbot.rpc("get_ventas_odv_usuario", {
+        const { data, error } = await chatbot.rpc("get_user_odv_sales", {
           p_user_id: userId,
           p_is_admin: true,
           p_sku_filter: skuFilter,
@@ -793,7 +793,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (v) =>
-              `${v.fecha} | ${v.client_name} | ${v.sku}: ${v.description} (${v.brand}) x${v.quantity} @ $${v.price}`
+              `${v.date} | ${v.client_name} | ${v.sku}: ${v.description} (${v.brand}) x${v.quantity} @ $${v.price}`
           )
           .join("\n");
       }
@@ -801,7 +801,7 @@ async function executeTool(
       case "get_recolecciones": {
         const idCliente = (args.client_id as string) ?? null;
         const { data, error } = await chatbot.rpc(
-          "get_recolecciones_usuario",
+          "get_user_collections",
           {
             p_user_id: userId,
             p_client_id: idCliente,
@@ -820,8 +820,8 @@ async function executeTool(
           const items = itemsList.length > 0
             ? itemsList.map((i) => `${i.sku} x${i.quantity}`).join(", ")
             : "Sin items";
-          const obs = r.cedis_observaciones
-            ? ` | Obs: ${r.cedis_observaciones}`
+          const obs = r.cedis_observations
+            ? ` | Obs: ${r.cedis_observations}`
             : "";
           return `${r.created_at?.substring(0, 10)} | ${r.client_name} | ${r.status} | ${piezas} piezas | ${items}${obs}`;
         });
@@ -831,7 +831,7 @@ async function executeTool(
 
       case "get_estadisticas_corte": {
         const { data, error } = await admin.rpc(
-          "get_corte_stats_generales_con_comparacion"
+          "get_cutoff_general_stats_with_comparison"
         );
         if (error) return `Error: ${error.message}`;
         if (!data) return "No hay estadisticas del corte actual.";
@@ -842,7 +842,7 @@ async function executeTool(
 
       case "get_estadisticas_por_medico": {
         const { data: statsData, error: statsError } = await admin.rpc(
-          "get_corte_stats_por_medico_con_comparacion"
+          "get_cutoff_stats_by_doctor_with_comparison"
         );
         if (statsError) return `Error: ${statsError.message}`;
         if (!statsData?.length) return "No hay estadisticas por medico.";
@@ -873,7 +873,7 @@ async function executeTool(
       case "get_ranking_ventas": {
         const limite = (args.limite as number) ?? 20;
         const { data, error } = await chatbot.rpc(
-          "get_ranking_ventas_completo",
+          "get_complete_sales_ranking",
           { p_limite: limite }
         );
         if (error) return `Error: ${error.message}`;
@@ -888,7 +888,7 @@ async function executeTool(
 
       case "get_rendimiento_marcas": {
         const { data, error } = await chatbot.rpc(
-          "get_rendimiento_marcas_completo"
+          "get_complete_brand_performance"
         );
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de rendimiento por marca.";
@@ -903,7 +903,7 @@ async function executeTool(
       case "get_datos_historicos": {
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
-        const { data, error } = await admin.rpc("get_corte_historico_data", {
+        const { data, error } = await admin.rpc("get_historical_cutoff_data", {
           p_fecha_inicio: fechaInicio,
           p_fecha_fin: fechaFin,
         });
@@ -916,7 +916,7 @@ async function executeTool(
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
         const { data: facData, error: facError } = await admin.rpc(
-          "get_facturacion_composicion",
+          "get_billing_composition",
           {
             p_fecha_inicio: fechaInicio,
             p_fecha_fin: fechaFin,
@@ -931,7 +931,7 @@ async function executeTool(
           limited
             .map(
               (m) =>
-                `${m.client_name} | Rango: ${m.rango_actual ?? "N/A"} | Fact: $${m.facturacion_actual ?? 0} | Baseline: $${m.baseline ?? 0} | M1: $${m.current_m1 ?? 0} | M2: $${m.current_m2 ?? 0} | M3: $${m.current_m3 ?? 0} | Crec: ${m.pct_crecimiento ?? 0}%`
+                `${m.client_name} | Rango: ${m.current_tier ?? "N/A"} | Fact: $${m.current_billing ?? 0} | Baseline: $${m.baseline ?? 0} | M1: $${m.current_m1 ?? 0} | M2: $${m.current_m2 ?? 0} | M3: $${m.current_m3 ?? 0} | Crec: ${m.growth_pct ?? 0}%`
             )
             .join("\n")
         );
@@ -941,7 +941,7 @@ async function executeTool(
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
         const { data, error } = await admin.rpc(
-          "get_padecimiento_performance",
+          "get_condition_performance",
           {
             p_fecha_inicio: fechaInicio,
             p_fecha_fin: fechaFin,
@@ -953,7 +953,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (p) =>
-              `${p.padecimiento}: $${p.valor} | ${p.piezas} piezas`
+              `${p.condition}: $${p.value} | ${p.pieces} piezas`
           )
           .join("\n");
       }
@@ -962,7 +962,7 @@ async function executeTool(
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
         const { data, error } = await admin.rpc(
-          "get_impacto_botiquin_resumen",
+          "get_cabinet_impact_summary",
           {
             p_fecha_inicio: fechaInicio,
             p_fecha_fin: fechaFin,
@@ -973,20 +973,20 @@ async function executeTool(
           return "No hay datos de impacto del botiquin.";
         const row = (data as AnyRow[])[0];
         return [
-          `Adopciones (M1→ODV): ${row.adopciones} | Revenue: $${row.revenue_adopciones}`,
-          `Conversiones (M2): ${row.conversiones} | Revenue: $${row.revenue_conversiones}`,
-          `Exposiciones (M3): ${row.exposiciones} | Revenue: $${row.revenue_exposiciones}`,
-          `CrossSell: ${row.crosssell_pares} pares | Revenue: $${row.revenue_crosssell}`,
-          `Revenue total impacto: $${row.revenue_total_impacto}`,
-          `Revenue total ODV: $${row.revenue_total_odv}`,
-          `% impacto botiquin: ${row.porcentaje_impacto}%`,
+          `Adopciones (M1→ODV): ${row.adoptions} | Revenue: $${row.revenue_adoptions}`,
+          `Conversiones (M2): ${row.conversions} | Revenue: $${row.revenue_conversions}`,
+          `Exposiciones (M3): ${row.exposures} | Revenue: $${row.revenue_exposures}`,
+          `CrossSell: ${row.crosssell_pairs} pares | Revenue: $${row.revenue_crosssell}`,
+          `Revenue total impacto: $${row.total_impact_revenue}`,
+          `Revenue total ODV: $${row.total_odv_revenue}`,
+          `% impacto botiquin: ${row.impact_percentage}%`,
         ].join("\n");
       }
 
-      case "get_precios_medicamentos": {
+      case "get_medication_prices": {
         const busqueda = args.busqueda as string;
         const marca = (args.brand as string) ?? null;
-        const { data, error } = await chatbot.rpc("get_precios_medicamentos", {
+        const { data, error } = await chatbot.rpc("get_medication_prices", {
           p_busqueda: busqueda,
           p_brand_filter: marca,
         });
@@ -996,7 +996,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (m) =>
-              `${m.sku}: ${m.description} (${m.brand}) | $${m.price} | ${m.content ?? ""} | Actualizado: ${m.ultima_actualizacion?.substring(0, 10) ?? "N/A"}`
+              `${m.sku}: ${m.description} (${m.brand}) | $${m.price} | ${m.content ?? ""} | Actualizado: ${m.last_updated?.substring(0, 10) ?? "N/A"}`
           )
           .join("\n");
       }
