@@ -5,7 +5,9 @@
 -- correlated subqueries that only fire for ODV-type tasks (VENTA_ODV,
 -- ODV_BOTIQUIN), so non-ODV tasks have zero overhead.
 
-CREATE OR REPLACE VIEW public.v_visit_tasks_operativo AS
+DROP VIEW IF EXISTS public.v_visit_tasks_operativo;
+
+CREATE VIEW public.v_visit_tasks_operativo AS
 SELECT
     (vt.task_id)::text AS task_id,
     vt.visit_id,
