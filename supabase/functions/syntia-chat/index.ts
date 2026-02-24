@@ -1307,7 +1307,7 @@ async function handleSendMessage(
   body: {
     message: string;
     conversation_id?: string;
-    context_cliente_id?: string;
+    context_client_id?: string;
     stream?: boolean;
   }
 ): Promise<Response> {
@@ -1405,7 +1405,7 @@ async function handleSendMessage(
         mergedContents,
         conversationId!,
         body.message,
-        body.context_cliente_id || null,
+        body.context_client_id || null,
         usage,
         history,
         startTime,
@@ -1417,7 +1417,7 @@ async function handleSendMessage(
         mergedContents,
         conversationId!,
         body.message,
-        body.context_cliente_id || null,
+        body.context_client_id || null,
         usage,
         history,
         startTime,
@@ -1669,13 +1669,13 @@ async function handleStreamingResponse(
               conversation_id: conversationId,
               role: "user",
               content: userMessage,
-              context_cliente_id: clienteId,
+              context_client_id: clienteId,
             },
             {
               conversation_id: conversationId,
               role: "assistant",
               content: fullText,
-              context_cliente_id: clienteId,
+              context_client_id: clienteId,
               tokens_input: tokensInput,
               tokens_output: tokensOutput,
               latency_ms: latencyMs,
@@ -1847,13 +1847,13 @@ async function handleNonStreamingResponse(
         conversation_id: conversationId,
         role: "user",
         content: userMessage,
-        context_cliente_id: clienteId,
+        context_client_id: clienteId,
       },
       {
         conversation_id: conversationId,
         role: "assistant",
         content: finalText,
-        context_cliente_id: clienteId,
+        context_client_id: clienteId,
         tokens_input: tokensInput,
         tokens_output: tokensOutput,
         latency_ms: latencyMs,
