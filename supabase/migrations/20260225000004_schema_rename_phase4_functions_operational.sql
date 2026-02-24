@@ -5,6 +5,39 @@
 -- Function names themselves renamed where applicable.
 -- ============================================================================
 
+-- Auth helpers (must be created first — referenced by can_access_client, can_access_visit, RLS policies)
+
+CREATE OR REPLACE FUNCTION public.current_user_id()
+ RETURNS text
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+ SET row_security TO 'off'
+AS $function$
+  select u.user_id
+  from public.users u
+  where u.auth_user_id = auth.uid()
+  limit 1;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+ RETURNS boolean
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+ SET row_security TO 'off'
+AS $function$
+  select exists (
+    select 1
+    from public.users u
+    where u.auth_user_id = auth.uid()
+      and u.role IN ('ADMIN', 'OWNER')
+      and u.active = true
+  );
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.audit_saga_transactions()
  RETURNS trigger
  LANGUAGE plpgsql
