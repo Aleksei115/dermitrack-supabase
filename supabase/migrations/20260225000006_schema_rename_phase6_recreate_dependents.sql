@@ -462,8 +462,14 @@ END $$;
 -- ---------------------------------------------------------------------------
 GRANT USAGE ON SCHEMA analytics TO authenticated;
 GRANT USAGE ON SCHEMA analytics TO anon;
-GRANT USAGE ON SCHEMA archive TO authenticated;
-GRANT USAGE ON SCHEMA audit TO authenticated;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'archive') THEN
+    GRANT USAGE ON SCHEMA archive TO authenticated;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'audit') THEN
+    GRANT USAGE ON SCHEMA audit TO authenticated;
+  END IF;
+END $$;
 GRANT USAGE ON SCHEMA chatbot TO authenticated;
 
 -- Reload PostgREST schema cache
