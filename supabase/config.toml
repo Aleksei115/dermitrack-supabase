@@ -404,6 +404,9 @@ verify_jwt = false
 [functions.send-push-notification]
 verify_jwt = false
 
+[functions.reset-user-password]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
