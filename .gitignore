@@ -7,6 +7,13 @@
 .env.local
 .env.*.local
 
+# Dependencies
+node_modules/
+package-lock.json
+
+# Scripts with secrets
+scripts/
+
 # OS
 .DS_Store
 Thumbs.db
