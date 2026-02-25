@@ -13556,6 +13556,70 @@ CREATE TRIGGER update_saga_transactions_updated_at BEFORE UPDATE ON public.saga_
 CREATE TRIGGER validate_saga_items_unique BEFORE INSERT ON public.saga_transactions FOR EACH ROW EXECUTE FUNCTION public.validate_unique_skus_in_items();
 
 
+-- =============================================================================
+-- ARCHIVE SCHEMA: Legacy tables (archived 2026-02-03, still referenced by FK)
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS archive;
+COMMENT ON SCHEMA archive IS 'Schema para tablas legacy/archivadas que ya no se usan activamente';
+
+CREATE TABLE archive.cabinet_cycles (
+    cycle_id integer NOT NULL,
+    client_id character varying(150) NOT NULL,
+    user_id character varying(150) NOT NULL,
+    type public.cabinet_cycle_type NOT NULL,
+    created_date timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    previous_cycle_id integer,
+    latitude numeric(9,6),
+    longitude numeric(9,6)
+);
+
+CREATE SEQUENCE archive.ciclos_botiquin_id_ciclo_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE archive.ciclos_botiquin_id_ciclo_seq OWNED BY archive.cabinet_cycles.cycle_id;
+ALTER TABLE ONLY archive.cabinet_cycles ALTER COLUMN cycle_id SET DEFAULT nextval('archive.ciclos_botiquin_id_ciclo_seq'::regclass);
+
+CREATE TABLE archive.cycle_surveys (
+    cycle_id integer NOT NULL,
+    responses jsonb DEFAULT '{}'::jsonb NOT NULL,
+    completed boolean DEFAULT false,
+    completed_date timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+ALTER TABLE ONLY archive.cabinet_cycles ADD CONSTRAINT ciclos_botiquin_pkey PRIMARY KEY (cycle_id);
+ALTER TABLE ONLY archive.cycle_surveys ADD CONSTRAINT encuestas_ciclo_pkey PRIMARY KEY (cycle_id);
+
+CREATE INDEX idx_ciclos_id_ciclo_anterior ON archive.cabinet_cycles USING btree (previous_cycle_id);
+CREATE INDEX idx_ciclos_id_cliente ON archive.cabinet_cycles USING btree (client_id);
+CREATE INDEX idx_ciclos_id_usuario ON archive.cabinet_cycles USING btree (user_id);
+
+CREATE TRIGGER update_cycle_surveys_updated_at BEFORE UPDATE ON archive.cycle_surveys FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+ALTER TABLE archive.cabinet_cycles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE archive.cycle_surveys ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY cycles_delete ON archive.cabinet_cycles FOR DELETE USING (public.is_admin());
+CREATE POLICY cycles_insert ON archive.cabinet_cycles FOR INSERT WITH CHECK ((public.can_access_client((client_id)::text) AND ((user_id)::text = public.current_user_id())));
+CREATE POLICY cycles_select ON archive.cabinet_cycles FOR SELECT USING (public.can_access_client((client_id)::text));
+CREATE POLICY cycles_update ON archive.cabinet_cycles FOR UPDATE USING (public.is_admin()) WITH CHECK (public.is_admin());
+CREATE POLICY service_role_all ON archive.cycle_surveys USING (true) WITH CHECK (true);
+
+GRANT USAGE ON SCHEMA archive TO authenticated;
+GRANT ALL ON TABLE archive.cabinet_cycles TO anon, authenticated, service_role;
+GRANT ALL ON SEQUENCE archive.ciclos_botiquin_id_ciclo_seq TO anon, authenticated, service_role;
+GRANT ALL ON TABLE archive.cycle_surveys TO anon, authenticated, service_role;
+
+-- Archive FK constraints
+ALTER TABLE ONLY archive.cabinet_cycles ADD CONSTRAINT ciclos_botiquin_id_ciclo_anterior_fkey FOREIGN KEY (previous_cycle_id) REFERENCES archive.cabinet_cycles(cycle_id);
+ALTER TABLE ONLY archive.cabinet_cycles ADD CONSTRAINT ciclos_botiquin_id_cliente_fkey FOREIGN KEY (client_id) REFERENCES public.clients(client_id);
+ALTER TABLE ONLY archive.cabinet_cycles ADD CONSTRAINT ciclos_botiquin_id_usuario_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id);
+ALTER TABLE ONLY archive.cycle_surveys ADD CONSTRAINT encuestas_ciclo_id_ciclo_fkey FOREIGN KEY (cycle_id) REFERENCES archive.cabinet_cycles(cycle_id);
+
+-- =============================================================================
+-- FK CONSTRAINTS
+-- =============================================================================
+
 --
 -- Name: conversations conversations_id_usuario_fkey; Type: FK CONSTRAINT; Schema: chatbot; Owner: -
 ALTER TABLE ONLY chatbot.conversations
