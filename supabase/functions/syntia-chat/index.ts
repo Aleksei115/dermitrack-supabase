@@ -57,7 +57,7 @@ const SYSTEM_PROMPT_CACHE_TTL = 10 * 60 * 1000;
 const TOKEN_CACHE_TTL = 55 * 60 * 1000;
 const COMPACTION_THRESHOLD = 8;
 const MAX_HISTORY_MESSAGES = 8;
-const MAX_TOOL_ITERATIONS = 3;
+const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOOL_RESULT_LENGTH = 8000;
 const RATE_LIMIT_MESSAGE =
   "Los creditos diarios se han agotado. Si requieres mas, contactate con el administrador.";
@@ -1619,8 +1619,9 @@ async function handleStreamingResponse(
                 contents: mutableContents,
                 ...TOOL_DECLARATIONS,
                 generationConfig: {
-                  maxOutputTokens: 1024,
+                  maxOutputTokens: 4096,
                   temperature: 0.3,
+                  thinkingConfig: { thinkingBudget: 4096 },
                 },
               }),
             });
@@ -1766,12 +1767,15 @@ async function handleStreamingResponse(
           break; // Text response, done
         }
 
-        // ── MAX_TOKENS: refund query, don't save, send error ──
-        if (hitMaxTokens) {
+        // ── MAX_TOKENS or empty response: refund query, send error ──
+        if (hitMaxTokens || fullText.trim().length === 0) {
           // Refund the query that was pre-incremented
           await chatbot.rpc("rollback_usage", {
             p_user_id: user.user_id,
           });
+
+          const errorCode = hitMaxTokens ? "RESPONSE_TOO_LONG" : "EMPTY_RESPONSE";
+          console.warn(`Stream ended with ${errorCode} (fullText length: ${fullText.length}, hitMaxTokens: ${hitMaxTokens})`);
 
           safeEnqueue(
             `data: ${JSON.stringify({
@@ -1916,7 +1920,11 @@ async function handleNonStreamingResponse(
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: mutableContents,
         ...TOOL_DECLARATIONS,
-        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
+        generationConfig: {
+          maxOutputTokens: 4096,
+          temperature: 0.3,
+          thinkingConfig: { thinkingBudget: 4096 },
+        },
       }),
     });
 
@@ -1962,6 +1970,17 @@ async function handleNonStreamingResponse(
 
     finalText = parts.find((p) => p.text && !p.thought)?.text ?? "";
     break;
+  }
+
+  // Empty response safety: refund and return error
+  if (finalText.trim().length === 0) {
+    await chatbot.rpc("rollback_usage", { p_user_id: user.user_id });
+    return jsonResponse({
+      error: "RESPONSE_TOO_LONG",
+      message: "Limite de respuesta alcanzado. Intenta hacer una pregunta mas especifica.",
+      remaining: usage.remaining,
+      queries_limit: usage.queries_limit,
+    }, 422);
   }
 
   const latencyMs = Date.now() - startTime;
