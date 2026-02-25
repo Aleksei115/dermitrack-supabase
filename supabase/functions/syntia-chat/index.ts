@@ -76,7 +76,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const chatbot = admin.schema("chatbot");
 
 // ============================================================================
-// Tool Declarations — 18 tools for Gemini function calling
+// Tool Declarations — 19 tools for Gemini function calling
 // ============================================================================
 
 const TOOL_DECLARATIONS = {
@@ -402,6 +402,22 @@ const TOOL_DECLARATIONS = {
             required: ["busqueda"],
           },
         },
+        {
+          name: "search_pubmed",
+          description:
+            "Busca el estudio clinico MAS RECIENTE en PubMed sobre un padecimiento dermatologico. Usa cuando el usuario pregunte sobre un padecimiento o tratamiento para enriquecer tu respuesta con evidencia cientifica actualizada. Retorna 1 solo estudio con fecha.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description:
+                  "Padecimiento o tratamiento en ingles (PubMed es en ingles). Ej: 'atopic dermatitis', 'psoriasis treatment'",
+              },
+            },
+            required: ["query"],
+          },
+        },
       ],
     },
   ],
@@ -602,6 +618,93 @@ async function getSystemPrompt(): Promise<string> {
 function truncateResult(text: string): string {
   if (text.length <= MAX_TOOL_RESULT_LENGTH) return text;
   return text.substring(0, MAX_TOOL_RESULT_LENGTH) + "\n... (resultado truncado)";
+}
+
+// ============================================================================
+// PubMed Search — NCBI E-utilities (esearch + efetch)
+// ============================================================================
+
+function extractXmlTag(xml: string, tag: string): string {
+  const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
+  const match = xml.match(regex);
+  return match ? match[1].trim() : "";
+}
+
+function extractPubDate(articleXml: string): string {
+  const pubDate = extractXmlTag(articleXml, "PubDate");
+  if (pubDate) {
+    const year = extractXmlTag(pubDate, "Year");
+    const month = extractXmlTag(pubDate, "Month");
+    if (year) return month ? `${month} ${year}` : year;
+  }
+  return "Fecha no disponible";
+}
+
+async function searchPubMed(query: string): Promise<string> {
+  try {
+    // Step 1: esearch — find top 1 PMID sorted by date
+    const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query + " dermatology")}&retmode=json&retmax=1&sort=date`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) return "Error al buscar en PubMed.";
+
+    const searchData = await searchRes.json();
+    const ids: string[] = searchData.esearchresult?.idlist ?? [];
+    if (ids.length === 0)
+      return "No se encontraron estudios recientes en PubMed para esa busqueda.";
+
+    const pmid = ids[0];
+
+    // Step 2: efetch — get abstract XML
+    const fetchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml&rettype=abstract`;
+    const fetchRes = await fetch(fetchUrl);
+    if (!fetchRes.ok) return "Error al obtener articulo de PubMed.";
+
+    const xml = await fetchRes.text();
+
+    // Parse article fields
+    const title = extractXmlTag(xml, "ArticleTitle") || "Sin titulo";
+    const journal = extractXmlTag(xml, "Title") || "Journal desconocido";
+    const pubDate = extractPubDate(xml);
+
+    // Abstract — may have multiple AbstractText sections
+    let abstract = "";
+    const abstractMatch = xml.match(/<Abstract>([\s\S]*?)<\/Abstract>/i);
+    if (abstractMatch) {
+      const abstractTexts =
+        abstractMatch[1].match(
+          /<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/gi
+        ) ?? [];
+      abstract = abstractTexts
+        .map((t) => t.replace(/<[^>]+>/g, "").trim())
+        .join(" ");
+    }
+    if (abstract.length > 500)
+      abstract = abstract.substring(0, 500) + "...";
+    if (!abstract) abstract = "Abstract no disponible.";
+
+    // First author
+    const authorBlock = xml.match(/<Author[^>]*>([\s\S]*?)<\/Author>/i);
+    let author = "Autor desconocido";
+    if (authorBlock) {
+      const lastName = extractXmlTag(authorBlock[1], "LastName");
+      const initials = extractXmlTag(authorBlock[1], "Initials");
+      if (lastName) author = `${lastName} ${initials}`.trim() + " et al.";
+    }
+
+    // DOI
+    const doiMatch = xml.match(
+      /<ArticleId IdType="doi">([\s\S]*?)<\/ArticleId>/i
+    );
+    const doi = doiMatch ? doiMatch[1].trim() : null;
+
+    // Format result
+    const doiLine = doi ? `DOI: ${doi} | ` : "";
+    return `Estudio reciente (${pubDate}) — ${journal}\n"${title}"\n${author}\nAbstract: ${abstract}\n${doiLine}PMID: ${pmid}`;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("PubMed search error:", msg);
+    return "Error al consultar PubMed. Intenta de nuevo.";
+  }
 }
 
 // deno-lint-ignore no-explicit-any
@@ -1004,6 +1107,11 @@ async function executeTool(
               `${m.sku}: ${m.description} (${m.brand}) | $${m.price} | ${m.content ?? ""} | Actualizado: ${m.last_updated?.substring(0, 10) ?? "N/A"}`
           )
           .join("\n");
+      }
+
+      case "search_pubmed": {
+        const query = args.query as string;
+        return await searchPubMed(query);
       }
 
       default:
