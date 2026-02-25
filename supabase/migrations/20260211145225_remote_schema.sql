@@ -7,8 +7,10 @@
 -- Skip function body validation during creation (functions reference tables created later)
 SET check_function_bodies = false;
 
--- Extension required by fuzzy search functions
+-- Extensions required by the schema
 CREATE EXTENSION IF NOT EXISTS unaccent SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS vector SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions;
 
 --
 -- Name: analytics; Type: SCHEMA; Schema: -; Owner: -
