@@ -4,6 +4,9 @@
 -- This replaces all previous incremental migrations (82 files → 1 baseline)
 -- =============================================================================
 
+-- Skip function body validation during creation (functions reference tables created later)
+SET check_function_bodies = false;
+
 -- Extension required by fuzzy search functions
 CREATE EXTENSION IF NOT EXISTS unaccent SCHEMA public;
 
