@@ -747,7 +747,7 @@ async function executeTool(
             chatbot.rpc("classification_by_client", {
               p_client_id: idCliente,
             }),
-            chatbot.rpc("get_complete_sales_ranking", { p_limite: 200 }),
+            chatbot.rpc("get_complete_sales_ranking", { p_limit_count: 200 }),
           ]);
 
           // 1. Exclude current inventory
@@ -859,8 +859,8 @@ async function executeTool(
           p_client_id: idCliente,
           p_user_id: userId,
           p_is_admin: true,
-          p_fuente: fuente,
-          p_limite: limite,
+          p_source: fuente,
+          p_limit_count: limite,
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length)
@@ -894,7 +894,7 @@ async function executeTool(
           p_user_id: userId,
           p_is_admin: true,
           p_sku_filter: skuFilter,
-          p_limite: limite,
+          p_limit_count: limite,
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No se encontraron ventas ODV.";
@@ -968,8 +968,8 @@ async function executeTool(
         const fechaFin = (args.fecha_fin as string) ?? null;
         const { data, error } = await admin.rpc("get_product_interest", {
           p_limit: limite,
-          p_fecha_inicio: fechaInicio,
-          p_fecha_fin: fechaFin,
+          p_start_date: fechaInicio,
+          p_end_date: fechaFin,
         });
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de ranking de productos.";
@@ -982,7 +982,7 @@ async function executeTool(
         const limite = (args.limite as number) ?? 20;
         const { data, error } = await chatbot.rpc(
           "get_complete_sales_ranking",
-          { p_limite: limite }
+          { p_limit_count: limite }
         );
         if (error) return `Error: ${error.message}`;
         if (!data?.length) return "No hay datos de ventas.";
@@ -1012,8 +1012,8 @@ async function executeTool(
         const fechaInicio = (args.fecha_inicio as string) ?? null;
         const fechaFin = (args.fecha_fin as string) ?? null;
         const { data, error } = await admin.rpc("get_historical_cutoff_data", {
-          p_fecha_inicio: fechaInicio,
-          p_fecha_fin: fechaFin,
+          p_start_date: fechaInicio,
+          p_end_date: fechaFin,
         });
         if (error) return `Error: ${error.message}`;
         if (!data) return "No hay datos historicos disponibles.";
@@ -1026,8 +1026,8 @@ async function executeTool(
         const { data: facData, error: facError } = await admin.rpc(
           "get_billing_composition",
           {
-            p_fecha_inicio: fechaInicio,
-            p_fecha_fin: fechaFin,
+            p_start_date: fechaInicio,
+            p_end_date: fechaFin,
           }
         );
         if (facError) return `Error: ${facError.message}`;
@@ -1051,8 +1051,8 @@ async function executeTool(
         const { data, error } = await admin.rpc(
           "get_condition_performance",
           {
-            p_fecha_inicio: fechaInicio,
-            p_fecha_fin: fechaFin,
+            p_start_date: fechaInicio,
+            p_end_date: fechaFin,
           }
         );
         if (error) return `Error: ${error.message}`;
@@ -1072,8 +1072,8 @@ async function executeTool(
         const { data, error } = await admin.rpc(
           "get_cabinet_impact_summary",
           {
-            p_fecha_inicio: fechaInicio,
-            p_fecha_fin: fechaFin,
+            p_start_date: fechaInicio,
+            p_end_date: fechaFin,
           }
         );
         if (error) return `Error: ${error.message}`;
@@ -1095,7 +1095,7 @@ async function executeTool(
         const busqueda = args.busqueda as string;
         const marca = (args.brand as string) ?? null;
         const { data, error } = await chatbot.rpc("get_medication_prices", {
-          p_busqueda: busqueda,
+          p_search_term: busqueda,
           p_brand_filter: marca,
         });
         if (error) return `Error: ${error.message}`;
