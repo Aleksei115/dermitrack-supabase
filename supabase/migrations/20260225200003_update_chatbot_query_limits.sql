@@ -1,9 +1,14 @@
 -- Update chatbot query limits: REP 5→7, ADMIN stays 10
+-- IMPORTANT: original functions use CHARACTER VARYING, not TEXT
 
--- 1. Recreate check_and_increment_usage with new limits
+-- 1. Drop TEXT overloads if they exist (created by mistake)
+DROP FUNCTION IF EXISTS chatbot.check_and_increment_usage(text, text);
+DROP FUNCTION IF EXISTS chatbot.get_remaining_queries(text, text);
+
+-- 2. Replace check_and_increment_usage (matching original signature: character varying)
 CREATE OR REPLACE FUNCTION chatbot.check_and_increment_usage(
-  p_user_id TEXT,
-  p_role TEXT
+  p_user_id CHARACTER VARYING,
+  p_role CHARACTER VARYING
 )
 RETURNS TABLE(allowed BOOLEAN, queries_used INTEGER, queries_limit INTEGER, remaining INTEGER)
 LANGUAGE plpgsql
@@ -47,10 +52,10 @@ BEGIN
 END;
 $$;
 
--- 2. Recreate get_remaining_queries with new limits
+-- 3. Replace get_remaining_queries (matching original signature: character varying)
 CREATE OR REPLACE FUNCTION chatbot.get_remaining_queries(
-  p_user_id TEXT,
-  p_role TEXT
+  p_user_id CHARACTER VARYING,
+  p_role CHARACTER VARYING
 )
 RETURNS TABLE(queries_used INTEGER, queries_limit INTEGER, remaining INTEGER)
 LANGUAGE plpgsql
