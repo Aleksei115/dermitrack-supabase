@@ -76,7 +76,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const chatbot = admin.schema("chatbot");
 
 // ============================================================================
-// Tool Declarations — 19 tools for Gemini function calling
+// Tool Declarations — 21 tools for Gemini function calling
 // ============================================================================
 
 const TOOL_DECLARATIONS = {
@@ -180,7 +180,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_clasificacion_cliente",
           description:
-            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=venta directa de botiquin (productos vendidos al corte), M2=conversion (productos vendidos en botiquin que luego se volvieron venta recurrente ODV), M3=exposicion (productos que estuvieron en botiquin y luego aparecieron como venta recurrente ODV sin venta directa previa). Util para estrategia comercial.",
+            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=venta directa de botiquin (productos vendidos al corte), M2=conversion (productos vendidos en botiquin que luego se volvieron venta recurrente ODV), M3=exposicion (productos que estuvieron en botiquin y luego aparecieron como venta recurrente ODV sin venta directa previa). Util para estrategia comercial. IMPORTANTE: Solo muestra clasificaciones que aparezcan EXACTAMENTE en los resultados. Si un SKU del inventario NO aparece en estos resultados, su clasificacion es '-' (sin clasificar). NUNCA inferir o inventar clasificaciones.",
           parameters: {
             type: "object",
             properties: {
@@ -416,6 +416,28 @@ const TOOL_DECLARATIONS = {
               },
             },
             required: ["query"],
+          },
+        },
+        {
+          name: "get_estado_visitas",
+          description:
+            "Estado de las visitas de los medicos en el corte actual. Muestra que medicos tienen visitas pendientes, en progreso o completadas, y el progreso de sus tareas.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "get_refill_recommendations",
+          description:
+            "Recomendaciones de rellenado de botiquin para un medico. Muestra SKUs asignados que no tiene en stock, priorizados por tendencias de venta global. Requiere client_id (usar search_clientes primero).",
+          parameters: {
+            type: "object",
+            properties: {
+              client_id: {
+                type: "string",
+                description:
+                  "ID del medico (obtenido de search_clientes)",
+              },
+            },
+            required: ["client_id"],
           },
         },
       ],
@@ -988,8 +1010,12 @@ async function executeTool(
         if (!data?.length) return "No hay datos de ventas.";
         return (data as AnyRow[])
           .map(
-            (p) =>
-              `${p.sku}: ${p.description} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`
+            (p) => {
+              const desc = String(p.description ?? "").length > 50
+                ? String(p.description).substring(0, 50) + "..."
+                : String(p.description ?? "");
+              return `${p.sku}: ${desc} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`;
+            }
           )
           .join("\n");
       }
@@ -1112,6 +1138,38 @@ async function executeTool(
       case "search_pubmed": {
         const query = args.query as string;
         return await searchPubMed(query);
+      }
+
+      case "get_estado_visitas": {
+        const { data, error } = await chatbot.rpc("get_visit_status", {
+          p_user_id: userId,
+          p_is_admin: isAdmin,
+        });
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length) return "No hay visitas en el corte actual.";
+        return (data as AnyRow[])
+          .map(
+            (v) =>
+              `${v.client_name} | Visita: ${v.visit_type} | Status: ${v.visit_status} | Saga: ${v.saga_status ?? "N/A"} | Tareas: ${v.tasks_completed}/${v.tasks_total} | Fecha: ${v.created_at?.substring(0, 10) ?? "?"}`
+          )
+          .join("\n");
+      }
+
+      case "get_refill_recommendations": {
+        const clientId = args.client_id as string;
+        const { data, error } = await chatbot.rpc(
+          "get_refill_recommendations",
+          { p_client_id: clientId }
+        );
+        if (error) return `Error: ${error.message}`;
+        if (!data?.length)
+          return "No hay SKUs asignados sin stock para este medico. Todos los SKUs asignados ya tienen inventario.";
+        return (data as AnyRow[])
+          .map(
+            (r) =>
+              `${r.sku}: ${r.description} (${r.brand}) $${r.price} | ${r.was_in_cabinet ? "Estuvo en botiquin" : "Nunca en botiquin"} | Ventas globales: ${r.global_sales_pieces}pz $${r.global_sales_value} | ${r.recommendation}`
+          )
+          .join("\n");
       }
 
       default:
