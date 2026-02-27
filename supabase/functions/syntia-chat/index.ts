@@ -282,7 +282,7 @@ const TOOL_DECLARATIONS = {
             properties: {
               limite: {
                 type: "integer",
-                description: "Maximo de productos (default 20)",
+                description: "Maximo de productos (default 10, max 15)",
               },
             },
             required: [],
@@ -735,7 +735,8 @@ type AnyRow = Record<string, any>;
 async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  user: UserInfo
+  user: UserInfo,
+  validClientNames?: Set<string>
 ): Promise<string> {
   const { isAdmin, userId } = getUserFilter(user);
 
@@ -846,13 +847,40 @@ async function executeTool(
           p_limit: 5,
         });
         if (error) return `Error: ${error.message}`;
-        if (!data?.length) return "No se encontraron medicos con ese nombre.";
-        return (data as AnyRow[])
-          .map(
-            (c) =>
-              `client_id: ${c.client_id} | Nombre: ${c.name} | Similitud: ${(c.similarity * 100).toFixed(0)}%`
-          )
-          .join("\n");
+        if (!data?.length)
+          return `RESULTADO: 0 medicos encontrados con "${nombre}". NO existen en la base de datos. Responde: "No encontre un medico con ese nombre. Podrias verificar?"`;
+
+        const results = data as AnyRow[];
+
+        // Track valid names for post-generation validation
+        if (validClientNames) {
+          for (const c of results) {
+            if (c.name) validClientNames.add(c.name.toUpperCase());
+          }
+        }
+
+        const fmt = (c: AnyRow) =>
+          `client_id: ${c.client_id} | Nombre: ${c.name} | Similitud: ${(c.similarity * 100).toFixed(0)}%`;
+
+        // Smart filtering: if one clear winner, return only that one
+        if (
+          results.length === 1 ||
+          (results.length > 1 &&
+            results[0].similarity > 0.55 &&
+            results[0].similarity > results[1].similarity * 2)
+        ) {
+          const match = results[0];
+          return [
+            `RESULTADO: 1 medico encontrado. NO hay otros medicos con nombre "${nombre}" en la base de datos.`,
+            `→ ${match.name} (client_id: ${match.client_id})`,
+            `INSTRUCCION: Usa EXACTAMENTE el nombre "${match.name}" en tu respuesta. NO inventes ni agregues otros nombres. Solo existe ESTE medico.`,
+          ].join("\n");
+        }
+        return [
+          `RESULTADO: ${results.length} medicos encontrados. SOLO existen estos ${results.length}:`,
+          ...results.map((c, i) => `${i + 1}. ${c.name} (client_id: ${c.client_id})`),
+          `INSTRUCCION: Lista UNICAMENTE los ${results.length} nombres de arriba y pregunta al usuario a cual se refiere. NO inventes ni agregues otros nombres.`,
+        ].join("\n");
       }
 
       case "get_doctor_inventory": {
@@ -868,7 +896,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (item) =>
-              `${item.sku}: ${item.description} (${item.brand}) | Cant: ${item.available_quantity} | $${item.price} | ${item.content ?? ""}`
+              `${item.sku}: ${item.product ?? item.description} (${item.brand}) | Cant: ${item.available_quantity} | $${item.price} | ${item.content ?? ""}`
           )
           .join("\n");
       }
@@ -1001,7 +1029,7 @@ async function executeTool(
       }
 
       case "get_ranking_ventas": {
-        const limite = (args.limite as number) ?? 20;
+        const limite = Math.min((args.limite as number) ?? 10, 15);
         const { data, error } = await chatbot.rpc(
           "get_complete_sales_ranking",
           { p_limit_count: limite }
@@ -1011,10 +1039,8 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (p) => {
-              const desc = String(p.description ?? "").length > 50
-                ? String(p.description).substring(0, 50) + "..."
-                : String(p.description ?? "");
-              return `${p.sku}: ${desc} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`;
+              const name = String(p.product ?? p.description ?? "").substring(0, 50);
+              return `${p.sku}: ${name} (${p.brand}) | M1: ${p.piezas_botiquin}pz $${p.ventas_botiquin} | M2: ${p.piezas_conversion}pz $${p.ventas_conversion} | M3: ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`;
             }
           )
           .join("\n");
@@ -1167,7 +1193,7 @@ async function executeTool(
         return (data as AnyRow[])
           .map(
             (r) =>
-              `${r.sku}: ${r.description} (${r.brand}) $${r.price} | ${r.was_in_cabinet ? "Estuvo en botiquin" : "Nunca en botiquin"} | Ventas globales: ${r.global_sales_pieces}pz $${r.global_sales_value} | ${r.recommendation}`
+              `${r.sku}: ${r.product ?? r.description} (${r.brand}) $${r.price} | ${r.was_in_cabinet ? "Estuvo en botiquin" : "Nunca en botiquin"} | Ventas globales: ${r.global_sales_pieces}pz $${r.global_sales_value} | ${r.recommendation}`
           )
           .join("\n");
       }
@@ -1615,6 +1641,70 @@ async function handleSendMessage(
 }
 
 // ============================================================================
+// Post-Generation Name Validation
+// ============================================================================
+
+// Keywords to exclude from name detection (common uppercase terms in responses)
+const NAME_EXCLUSIONS = new Set([
+  "SKU", "ODV", "M1", "M2", "M3", "M4", "TOTAL", "VENTA", "VENTAS",
+  "BOTIQUIN", "CONVERSION", "EXPOSICION", "CREACION", "RECOLECCION",
+  "SALE", "PLACEMENT", "COLLECTION", "STOCK", "PRECIO", "MARCA",
+  "CANTIDAD", "PIEZAS", "UNIDADES", "RESULTADO", "INSTRUCCION",
+  "MEDICO", "MEDICOS", "DOCTOR", "DOCTORA", "DRA", "DR",
+  "NOTA", "ASESOR", "ADMIN", "OWNER", "DIAMANTE", "ORO", "PLATA", "BRONCE",
+  "SYNTIA", "DERMITRACK", "ZOHO", "CRM", "PUBMED",
+  "PADECIMIENTO", "TRATAMIENTO", "PACIENTE", "PACIENTES",
+  "ROI", "KPI", "CORTE", "PERIODO", "RANKING",
+  "ALTA", "BAJA", "MEDIA", "DEMANDA",
+]);
+
+function validateResponseNames(
+  text: string,
+  validNames: Set<string>
+): { text: string; hadHallucinations: boolean } {
+  // Skip if no client search was performed (no valid names to compare against)
+  if (validNames.size === 0) return { text, hadHallucinations: false };
+
+  // Regex: sequences of 2+ uppercase words (typical doctor name pattern)
+  // Matches: "ADRIANA GRICEL PEREZ URIBE", "JUAN CARLOS LOPEZ"
+  const namePattern = /\b([A-ZÁÉÍÓÚÑ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ]{2,})+)\b/g;
+
+  let hadHallucinations = false;
+  const validated = text.replace(namePattern, (match) => {
+    const words = match.split(/\s+/);
+
+    // Skip if ALL words are known keywords/abbreviations
+    if (words.every((w) => NAME_EXCLUSIONS.has(w))) return match;
+
+    // Skip short matches (2 words where both are < 4 chars — likely abbreviations)
+    if (words.length === 2 && words.every((w) => w.length < 4)) return match;
+
+    // Check if this name is in our valid set (exact or partial match)
+    const upperMatch = match.toUpperCase();
+    for (const validName of validNames) {
+      if (validName.includes(upperMatch) || upperMatch.includes(validName)) {
+        return match; // Valid name found
+      }
+    }
+
+    // Check partial: if any valid name shares 2+ words with this match
+    const matchWords = new Set(words.filter((w) => !NAME_EXCLUSIONS.has(w)));
+    for (const validName of validNames) {
+      const validWords = new Set(validName.split(/\s+/));
+      const overlap = [...matchWords].filter((w) => validWords.has(w));
+      if (overlap.length >= 2) return match; // Sufficient overlap
+    }
+
+    // Hallucinated name detected
+    console.warn(`[Name validation] Removed hallucinated name: "${match}"`);
+    hadHallucinations = true;
+    return "[nombre no verificado]";
+  });
+
+  return { text: validated, hadHallucinations };
+}
+
+// ============================================================================
 // Streaming Response with Function Calling
 // ============================================================================
 
@@ -1656,6 +1746,7 @@ async function handleStreamingResponse(
         let tokensInput = 0;
         let tokensOutput = 0;
         let hitMaxTokens = false;
+        const validClientNames = new Set<string>();
 
         // Function calling loop: max MAX_TOOL_ITERATIONS rounds
         for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
@@ -1677,7 +1768,7 @@ async function handleStreamingResponse(
                 contents: mutableContents,
                 ...TOOL_DECLARATIONS,
                 generationConfig: {
-                  maxOutputTokens: 4096,
+                  maxOutputTokens: 2048,
                   temperature: 0.3,
                   thinkingConfig: { thinkingBudget: 4096 },
                 },
@@ -1796,7 +1887,7 @@ async function handleStreamingResponse(
             let results: unknown[];
             try {
               results = await Promise.all(
-                functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
+                functionCalls.map((fc) => executeTool(fc.name, fc.args, user, validClientNames))
               );
             } finally {
               clearInterval(keepaliveInterval);
@@ -1846,6 +1937,18 @@ async function handleStreamingResponse(
 
           try { controller.close(); } catch { /* already closed */ }
           return;
+        }
+
+        // Post-generation name validation
+        const validation = validateResponseNames(fullText, validClientNames);
+        fullText = validation.text;
+        if (validation.hadHallucinations) {
+          safeEnqueue(
+            `data: ${JSON.stringify({
+              t: "\n\n_Nota: Se detectaron nombres no verificados y fueron reemplazados por seguridad._",
+              d: false,
+            })}\n\n`
+          );
         }
 
         // Store messages in DB
@@ -1962,6 +2065,7 @@ async function handleNonStreamingResponse(
   let finalText = "";
   let tokensInput = 0;
   let tokensOutput = 0;
+  const validClientNames = new Set<string>();
 
   // Function calling loop
   for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
@@ -1979,7 +2083,7 @@ async function handleNonStreamingResponse(
         contents: mutableContents,
         ...TOOL_DECLARATIONS,
         generationConfig: {
-          maxOutputTokens: 4096,
+          maxOutputTokens: 2048,
           temperature: 0.3,
           thinkingConfig: { thinkingBudget: 4096 },
         },
@@ -2004,7 +2108,7 @@ async function handleNonStreamingResponse(
 
     if (functionCalls.length > 0) {
       const results = await Promise.all(
-        functionCalls.map((fc) => executeTool(fc.name, fc.args, user))
+        functionCalls.map((fc) => executeTool(fc.name, fc.args, user, validClientNames))
       );
 
       // Use ALL original parts (preserves thought_signature)
@@ -2029,6 +2133,10 @@ async function handleNonStreamingResponse(
     finalText = parts.find((p) => p.text && !p.thought)?.text ?? "";
     break;
   }
+
+  // Post-generation name validation
+  const validation = validateResponseNames(finalText, validClientNames);
+  finalText = validation.text;
 
   // Empty response safety: refund and return error
   if (finalText.trim().length === 0) {
