@@ -180,7 +180,7 @@ const TOOL_DECLARATIONS = {
         {
           name: "get_clasificacion_cliente",
           description:
-            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=venta directa de botiquin (productos vendidos al corte), M2=conversion (productos vendidos en botiquin que luego se volvieron venta recurrente ODV), M3=exposicion (productos que estuvieron en botiquin y luego aparecieron como venta recurrente ODV sin venta directa previa). Util para estrategia comercial.",
+            "Obtiene la clasificacion M1/M2/M3 de productos para un medico. M1=venta directa de botiquin (productos vendidos al corte), M2=conversion (productos vendidos en botiquin que luego se volvieron venta recurrente ODV), M3=exposicion (productos que estuvieron en botiquin y luego aparecieron como venta recurrente ODV sin venta directa previa). Util para estrategia comercial. IMPORTANTE: Solo muestra clasificaciones que aparezcan EXACTAMENTE en los resultados. Si un SKU del inventario NO aparece en estos resultados, su clasificacion es '-' (sin clasificar). NUNCA inferir o inventar clasificaciones.",
           parameters: {
             type: "object",
             properties: {
@@ -1010,8 +1010,12 @@ async function executeTool(
         if (!data?.length) return "No hay datos de ventas.";
         return (data as AnyRow[])
           .map(
-            (p) =>
-              `${p.sku}: ${p.description} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`
+            (p) => {
+              const desc = String(p.description ?? "").length > 50
+                ? String(p.description).substring(0, 50) + "..."
+                : String(p.description ?? "");
+              return `${p.sku}: ${desc} (${p.brand}) | Botiquin(M1): ${p.piezas_botiquin}pz $${p.ventas_botiquin} | Conversion(M2): ${p.piezas_conversion}pz $${p.ventas_conversion} | Exposicion(M3): ${p.piezas_exposicion}pz $${p.ventas_exposicion} | TOTAL: ${p.piezas_totales}pz $${p.ventas_totales}`;
+            }
           )
           .join("\n");
       }
