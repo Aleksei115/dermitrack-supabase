@@ -751,9 +751,55 @@ async function executeTool(
           match_count: idCliente ? 25 : 10, // fetch more when filtering
         });
         if (error) return `Error: ${error.message}`;
-        if (!data?.length) return "No se encontraron medicamentos relevantes.";
 
-        let results = data as AnyRow[];
+        let results = (data ?? []) as AnyRow[];
+
+        // ── Hybrid search: fallback texto si embeddings no encuentran nada ──
+        if (results.length === 0) {
+          const keywords = query
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((w: string) => w.length > 2);
+
+          if (keywords.length > 0) {
+            const pattern = keywords.join("%");
+            const { data: textData } = await chatbot
+              .from("medications")
+              .select("sku, brand, description, content, price")
+              .or(
+                `product.ilike.%${pattern}%,description.ilike.%${pattern}%,brand.ilike.%${pattern}%`
+              )
+              .limit(10);
+
+            if (textData?.length) {
+              const skus = textData.map((m: AnyRow) => m.sku);
+              const { data: condData } = await chatbot
+                .from("medication_conditions")
+                .select("sku, conditions:conditions(name)")
+                .in("sku", skus);
+
+              const condMap = new Map<string, string[]>();
+              if (condData) {
+                for (const mc of condData as AnyRow[]) {
+                  const list = condMap.get(mc.sku) ?? [];
+                  if (mc.conditions?.name) list.push(mc.conditions.name);
+                  condMap.set(mc.sku, list);
+                }
+              }
+
+              results = textData.map((m: AnyRow) => ({
+                ...m,
+                conditions: condMap.get(m.sku)?.join(", ") ?? null,
+              }));
+
+              console.log(
+                `[Hybrid search] Embedding miss, text fallback found ${results.length} results for "${query}"`
+              );
+            }
+          }
+        }
+
+        if (!results.length) return "No se encontraron medicamentos relevantes.";
 
         // When recommending for a specific doctor: exclude existing products + enrich with sales data
         if (idCliente) {
