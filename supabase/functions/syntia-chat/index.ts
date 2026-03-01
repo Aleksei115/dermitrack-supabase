@@ -751,9 +751,54 @@ async function executeTool(
           match_count: idCliente ? 25 : 10, // fetch more when filtering
         });
         if (error) return `Error: ${error.message}`;
-        if (!data?.length) return "No se encontraron medicamentos relevantes.";
 
-        let results = data as AnyRow[];
+        let results = (data ?? []) as AnyRow[];
+
+        // ── Hybrid search: fallback fuzzy si embeddings no encuentran nada ──
+        if (results.length === 0) {
+          const { data: fuzzyData } = await chatbot.rpc(
+            "fuzzy_search_medications",
+            { p_search: query, p_limit: 10 }
+          );
+
+          if (fuzzyData?.length) {
+            const fuzzySkus = (fuzzyData as AnyRow[]).map((m) => m.sku);
+
+            // Fetch full medication data + conditions for matched SKUs
+            const [medsRes, condRes] = await Promise.all([
+              chatbot
+                .from("medications")
+                .select("sku, brand, description, content, price")
+                .in("sku", fuzzySkus),
+              chatbot
+                .from("medication_conditions")
+                .select("sku, conditions:conditions(name)")
+                .in("sku", fuzzySkus),
+            ]);
+
+            if (medsRes.data?.length) {
+              const condMap = new Map<string, string[]>();
+              if (condRes.data) {
+                for (const mc of condRes.data as AnyRow[]) {
+                  const list = condMap.get(mc.sku) ?? [];
+                  if (mc.conditions?.name) list.push(mc.conditions.name);
+                  condMap.set(mc.sku, list);
+                }
+              }
+
+              results = (medsRes.data as AnyRow[]).map((m) => ({
+                ...m,
+                conditions: condMap.get(m.sku)?.join(", ") ?? null,
+              }));
+
+              console.log(
+                `[Fuzzy search] Embedding miss, fuzzy fallback found ${results.length} results for "${query}"`
+              );
+            }
+          }
+        }
+
+        if (!results.length) return "No se encontraron medicamentos relevantes.";
 
         // When recommending for a specific doctor: exclude existing products + enrich with sales data
         if (idCliente) {
@@ -824,16 +869,47 @@ async function executeTool(
 
       case "search_fichas_tecnicas": {
         const query = args.query as string;
-        const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
-        const { data, error } = await chatbot.rpc("match_data_sheets", {
-          query_embedding: JSON.stringify(embedding),
-          match_threshold: 0.60,
-          match_count: 3,
-        });
-        if (error) return `Error: ${error.message}`;
-        if (!data?.length)
+        let sheets: AnyRow[] = [];
+
+        // ── Step 1: Resolve query → SKUs via fuzzy search (handles typos + accents) ──
+        const { data: medMatches } = await chatbot.rpc(
+          "fuzzy_search_medications",
+          { p_search: query, p_limit: 5 }
+        );
+
+        // ── Step 2: Fetch data sheet chunks for matched SKUs ──
+        if (medMatches?.length) {
+          const skus = (medMatches as AnyRow[]).map((m) => m.sku);
+          const { data: chunkData } = await chatbot
+            .from("data_sheet_chunks")
+            .select("sku, content, chunk_index")
+            .in("sku", skus)
+            .order("sku")
+            .order("chunk_index");
+
+          if (chunkData?.length) {
+            sheets = chunkData as AnyRow[];
+            console.log(
+              `[Fuzzy search] Resolved ${skus.length} medications, found ${sheets.length} data sheet chunks for "${query}"`
+            );
+          }
+        }
+
+        // ── Step 3: Fallback to embedding search for semantic queries ──
+        if (sheets.length === 0) {
+          const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
+          const { data, error } = await chatbot.rpc("match_data_sheets", {
+            query_embedding: JSON.stringify(embedding),
+            match_threshold: 0.60,
+            match_count: 3,
+          });
+          if (error) return `Error: ${error.message}`;
+          sheets = (data ?? []) as AnyRow[];
+        }
+
+        if (!sheets.length)
           return "No se encontro informacion tecnica relevante.";
-        return (data as AnyRow[])
+        return sheets
           .map((f) => `[${f.sku}]:\n${f.content}`)
           .join("\n\n");
       }
