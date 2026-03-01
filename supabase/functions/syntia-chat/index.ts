@@ -877,9 +877,41 @@ async function executeTool(
           match_count: 3,
         });
         if (error) return `Error: ${error.message}`;
-        if (!data?.length)
+
+        let sheets = (data ?? []) as AnyRow[];
+
+        // ── Hybrid search: fallback texto si embeddings no encuentran nada ──
+        if (sheets.length === 0) {
+          const keywords = query
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((w: string) => w.length > 2);
+
+          if (keywords.length > 0) {
+            // Try exact SKU match first, then content ILIKE
+            const skuPattern = keywords.join("%");
+            const { data: textData } = await chatbot
+              .from("data_sheet_chunks")
+              .select("sku, content, chunk_index")
+              .or(
+                `sku.ilike.%${skuPattern}%,content.ilike.%${skuPattern}%`
+              )
+              .order("sku")
+              .order("chunk_index")
+              .limit(10);
+
+            if (textData?.length) {
+              sheets = textData as AnyRow[];
+              console.log(
+                `[Hybrid search] Embedding miss, text fallback found ${sheets.length} data sheet chunks for "${query}"`
+              );
+            }
+          }
+        }
+
+        if (!sheets.length)
           return "No se encontro informacion tecnica relevante.";
-        return (data as AnyRow[])
+        return sheets
           .map((f) => `[${f.sku}]:\n${f.content}`)
           .join("\n\n");
       }
