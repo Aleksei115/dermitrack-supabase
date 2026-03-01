@@ -754,46 +754,45 @@ async function executeTool(
 
         let results = (data ?? []) as AnyRow[];
 
-        // ── Hybrid search: fallback texto si embeddings no encuentran nada ──
+        // ── Hybrid search: fallback fuzzy si embeddings no encuentran nada ──
         if (results.length === 0) {
-          const keywords = query
-            .toLowerCase()
-            .split(/\s+/)
-            .filter((w: string) => w.length > 2);
+          const { data: fuzzyData } = await chatbot.rpc(
+            "fuzzy_search_medications",
+            { p_search: query, p_limit: 10 }
+          );
 
-          if (keywords.length > 0) {
-            const pattern = keywords.join("%");
-            const { data: textData } = await chatbot
-              .from("medications")
-              .select("sku, brand, description, content, price")
-              .or(
-                `product.ilike.%${pattern}%,description.ilike.%${pattern}%,brand.ilike.%${pattern}%`
-              )
-              .limit(10);
+          if (fuzzyData?.length) {
+            const fuzzySkus = (fuzzyData as AnyRow[]).map((m) => m.sku);
 
-            if (textData?.length) {
-              const skus = textData.map((m: AnyRow) => m.sku);
-              const { data: condData } = await chatbot
+            // Fetch full medication data + conditions for matched SKUs
+            const [medsRes, condRes] = await Promise.all([
+              chatbot
+                .from("medications")
+                .select("sku, brand, description, content, price")
+                .in("sku", fuzzySkus),
+              chatbot
                 .from("medication_conditions")
                 .select("sku, conditions:conditions(name)")
-                .in("sku", skus);
+                .in("sku", fuzzySkus),
+            ]);
 
+            if (medsRes.data?.length) {
               const condMap = new Map<string, string[]>();
-              if (condData) {
-                for (const mc of condData as AnyRow[]) {
+              if (condRes.data) {
+                for (const mc of condRes.data as AnyRow[]) {
                   const list = condMap.get(mc.sku) ?? [];
                   if (mc.conditions?.name) list.push(mc.conditions.name);
                   condMap.set(mc.sku, list);
                 }
               }
 
-              results = textData.map((m: AnyRow) => ({
+              results = (medsRes.data as AnyRow[]).map((m) => ({
                 ...m,
                 conditions: condMap.get(m.sku)?.join(", ") ?? null,
               }));
 
               console.log(
-                `[Hybrid search] Embedding miss, text fallback found ${results.length} results for "${query}"`
+                `[Fuzzy search] Embedding miss, fuzzy fallback found ${results.length} results for "${query}"`
               );
             }
           }
@@ -870,43 +869,42 @@ async function executeTool(
 
       case "search_fichas_tecnicas": {
         const query = args.query as string;
-        const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
-        const { data, error } = await chatbot.rpc("match_data_sheets", {
-          query_embedding: JSON.stringify(embedding),
-          match_threshold: 0.60,
-          match_count: 3,
-        });
-        if (error) return `Error: ${error.message}`;
+        let sheets: AnyRow[] = [];
 
-        let sheets = (data ?? []) as AnyRow[];
+        // ── Step 1: Resolve query → SKUs via fuzzy search (handles typos + accents) ──
+        const { data: medMatches } = await chatbot.rpc(
+          "fuzzy_search_medications",
+          { p_search: query, p_limit: 5 }
+        );
 
-        // ── Hybrid search: fallback texto si embeddings no encuentran nada ──
-        if (sheets.length === 0) {
-          const keywords = query
-            .toLowerCase()
-            .split(/\s+/)
-            .filter((w: string) => w.length > 2);
+        // ── Step 2: Fetch data sheet chunks for matched SKUs ──
+        if (medMatches?.length) {
+          const skus = (medMatches as AnyRow[]).map((m) => m.sku);
+          const { data: chunkData } = await chatbot
+            .from("data_sheet_chunks")
+            .select("sku, content, chunk_index")
+            .in("sku", skus)
+            .order("sku")
+            .order("chunk_index");
 
-          if (keywords.length > 0) {
-            // Try exact SKU match first, then content ILIKE
-            const skuPattern = keywords.join("%");
-            const { data: textData } = await chatbot
-              .from("data_sheet_chunks")
-              .select("sku, content, chunk_index")
-              .or(
-                `sku.ilike.%${skuPattern}%,content.ilike.%${skuPattern}%`
-              )
-              .order("sku")
-              .order("chunk_index")
-              .limit(10);
-
-            if (textData?.length) {
-              sheets = textData as AnyRow[];
-              console.log(
-                `[Hybrid search] Embedding miss, text fallback found ${sheets.length} data sheet chunks for "${query}"`
-              );
-            }
+          if (chunkData?.length) {
+            sheets = chunkData as AnyRow[];
+            console.log(
+              `[Fuzzy search] Resolved ${skus.length} medications, found ${sheets.length} data sheet chunks for "${query}"`
+            );
           }
+        }
+
+        // ── Step 3: Fallback to embedding search for semantic queries ──
+        if (sheets.length === 0) {
+          const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
+          const { data, error } = await chatbot.rpc("match_data_sheets", {
+            query_embedding: JSON.stringify(embedding),
+            match_threshold: 0.60,
+            match_count: 3,
+          });
+          if (error) return `Error: ${error.message}`;
+          sheets = (data ?? []) as AnyRow[];
         }
 
         if (!sheets.length)
