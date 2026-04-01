@@ -19,16 +19,16 @@ SECURITY DEFINER
 SET search_path = metadata, public
 AS $$
     SELECT
-        d.schema_name::text,
+        d.table_schema::text,
         d.table_name::text,
         d.column_name::text,
         d.data_type::text,
         d.is_nullable::text,
         d.column_description::text
     FROM metadata.data_dictionary d
-    WHERE d.schema_name IN ('public', 'metadata')
+    WHERE d.table_schema IN ('public', 'metadata')
       AND (p_tables IS NULL OR d.table_name = ANY(p_tables))
-    ORDER BY d.schema_name, d.table_name, d.ordinal_position;
+    ORDER BY d.table_schema, d.table_name, d.column_name;
 $$;
 
 COMMENT ON FUNCTION chatbot.get_schema_context IS
