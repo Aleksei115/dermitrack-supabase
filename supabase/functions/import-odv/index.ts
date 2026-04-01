@@ -1,7 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import * as XLSX from "npm:xlsx";
 
 // --- Types ---
-
+  
 type CallerInfo = {
   auth_user_id: string;
   role: string;
@@ -130,6 +131,11 @@ async function getCallerInfo(
 function parseDateES(raw: string): string | null {
   const trimmed = raw.trim().toLowerCase();
 
+  // Format 0: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
   // Format 1: DD-mmm-YY (e.g. "15-ene-24")
   const match1 = trimmed.match(/^(\d{1,2})-([a-záéíóú]{3})-(\d{2})$/);
   if (match1) {
@@ -243,8 +249,8 @@ async function loadClientMapping(): Promise<{
   }
 
   for (const c of clientes ?? []) {
-    if (c.client_id_zoho_botiquin) {
-      botiquinMap.set(c.client_id_zoho_botiquin, c.client_id);
+    if (c.zoho_cabinet_client_id) {
+      botiquinMap.set(c.zoho_cabinet_client_id, c.client_id);
     }
     // client_id IS the zoho normal ID (canonical PK)
     normalMap.set(c.client_id, c.client_id);
@@ -317,7 +323,7 @@ function processFile(
     if (botiquinClientId) {
       result.botiquin_rows.push({
         odv_id: odvId,
-        fecha,
+        date: fecha,
         sku,
         client_id: botiquinClientId,
         quantity: cantidad,
@@ -327,7 +333,7 @@ function processFile(
       const precio = parsePrecio(precioRaw ?? "");
       result.ventas_rows.push({
         odv_id: odvId,
-        fecha,
+        date: fecha,
         sku,
         client_id: normalClientId,
         quantity: cantidad,
@@ -351,30 +357,44 @@ async function insertBatch(
   table: "cabinet_odv" | "odv_sales",
   rows: Record<string, unknown>[],
 ): Promise<{ inserted: number; duplicates: number; errors: string[] }> {
-  let inserted = 0;
-  let duplicates = 0;
   const errors: string[] = [];
 
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const chunk = rows.slice(i, i + BATCH_SIZE);
-    const { data, error } = await supabase
+  // 1. Deduplicar filas dentro del mismo lote (quedarse con la última)
+  const deduped = new Map<string, Record<string, unknown>>();
+  for (const r of rows) {
+    deduped.set(`${r.odv_id}|${r.client_id}|${r.sku}`, r);
+  }
+  const uniqueRows = [...deduped.values()];
+  const internalDups = rows.length - uniqueRows.length;
+
+  // 2. Contar existentes antes del upsert
+  const { count: countBefore } = await supabase
+    .from(table)
+    .select("*", { count: "exact", head: true });
+
+  // 3. Upsert con merge — ON CONFLICT (odv_id, client_id, sku) DO UPDATE
+  let upsertErrors = 0;
+  for (let i = 0; i < uniqueRows.length; i += BATCH_SIZE) {
+    const chunk = uniqueRows.slice(i, i + BATCH_SIZE);
+    const { error } = await supabase
       .from(table)
-      .upsert(chunk, {
-        onConflict: "odv_id,client_id,sku",
-        ignoreDuplicates: true,
-      })
-      .select("id_venta");
+      .upsert(chunk, { onConflict: "odv_id,client_id,sku" });
 
     if (error) {
-      errors.push(`${table} batch ${Math.floor(i / BATCH_SIZE)}: ${error.message}`);
-    } else {
-      const returnedCount = data?.length ?? 0;
-      inserted += returnedCount;
-      duplicates += chunk.length - returnedCount;
+      errors.push(`${table} upsert batch ${Math.floor(i / BATCH_SIZE)}: ${error.message}`);
+      upsertErrors += chunk.length;
     }
   }
 
-  return { inserted, duplicates, errors };
+  // 4. Contar existentes después para calcular insertados reales
+  const { count: countAfter } = await supabase
+    .from(table)
+    .select("*", { count: "exact", head: true });
+
+  const inserted = (countAfter ?? 0) - (countBefore ?? 0);
+  const duplicates = uniqueRows.length - upsertErrors - inserted + internalDups;
+
+  return { inserted, duplicates: Math.max(0, duplicates), errors };
 }
 
 // --- Main handler ---
@@ -435,18 +455,24 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Collect CSV files
-    const files: { name: string; text: string }[] = [];
+    // Collect CSV/XLSX files
+    const files: { name: string; text: string; isXlsx: boolean; buffer?: ArrayBuffer }[] = [];
     for (const [_key, value] of formData.entries()) {
-      if (value instanceof File && value.name.toLowerCase().endsWith(".csv")) {
-        const text = await value.text();
-        files.push({ name: value.name, text });
+      if (value instanceof File) {
+        const lowerName = value.name.toLowerCase();
+        if (lowerName.endsWith(".csv")) {
+          const text = await value.text();
+          files.push({ name: value.name, text, isXlsx: false });
+        } else if (lowerName.endsWith(".xlsx")) {
+          const buffer = await value.arrayBuffer();
+          files.push({ name: value.name, text: "", isXlsx: true, buffer });
+        }
       }
     }
 
     if (files.length === 0) {
       return jsonResponse(
-        { error: "No se encontraron archivos CSV en el FormData" },
+        { error: "No se encontraron archivos CSV o XLSX en el FormData" },
         400,
       );
     }
@@ -469,7 +495,33 @@ Deno.serve(async (req) => {
     let totalRows = 0;
 
     for (const file of files) {
-      const rows = parseCSV(file.text);
+      let rows: Record<string, string>[] = [];
+      
+      if (file.isXlsx && file.buffer) {
+        // Parse XLSX
+        const wb = XLSX.read(file.buffer, { type: "array", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+        
+        // Clean headers and convert Types
+        rows = rawRows.map(r => {
+          const cleaned: Record<string, string> = {};
+          for (const [k, v] of Object.entries(r)) {
+            let strVal = "";
+            if (v instanceof Date) {
+              // Extract YYYY-MM-DD properly taking UTC into account
+              const iso = v.toISOString();
+              strVal = iso.split("T")[0];
+            } else {
+              strVal = String(v).trim();
+            }
+            cleaned[k.trim()] = strVal;
+          }
+          return cleaned;
+        });
+      } else {
+        rows = parseCSV(file.text);
+      }
 
       if (rows.length === 0) {
         fileErrors.push({

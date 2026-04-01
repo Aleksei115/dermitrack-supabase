@@ -29,6 +29,8 @@ enabled = false
 port = 54322
 # Port used by db diff command to initialize the shadow database.
 shadow_port = 54320
+# Maximum amount of time to wait for health check when starting the local database.
+health_timeout = "2m"
 # The database major version to use. This has to be the same as your remote database's. Run `SHOW
 # server_version;` on the remote database to check.
 major_version = 17
@@ -105,22 +107,12 @@ enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
-[storage.buckets.medicamentos-assets]
-public = true
-
-[storage.buckets.medicaments-technical-sheet]
-public = false
-
-[storage.buckets.public-assets]
-public = true
-
-[storage.buckets.public-evidence]
-public = true
-file_size_limit = "5MiB"
-allowed_mime_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"]
-
-[storage.buckets.survey-evidence]
-public = false
+# Uncomment to configure local storage buckets
+# [storage.buckets.images]
+# public = false
+# file_size_limit = "50MiB"
+# allowed_mime_types = ["image/png", "image/jpeg"]
+# objects_path = "./images"
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
@@ -372,49 +364,11 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
-# Per-function configuration
-# All edge functions handle their own auth internally
-[functions.syntia-chat]
-verify_jwt = false
-
-[functions.admin-create-user]
-verify_jwt = false
-
-[functions.admin-update-user-email]
-verify_jwt = false
-
-[functions.admin-send-password-reset]
-verify_jwt = false
-
-[functions.create_user]
-verify_jwt = false
-
-[functions.import-odv]
-verify_jwt = false
-
-[functions.populate-embeddings]
-verify_jwt = false
-
-[functions.push-notification]
-verify_jwt = false
-
-[functions.seed-missing-auth-users]
-verify_jwt = false
-
-[functions.send-push-notification]
-verify_jwt = false
-
-[functions.reset-user-password]
-verify_jwt = false
-
 [analytics]
 enabled = true
 port = 54327
 # Configure one of the supported backends: `postgres`, `bigquery`.
 backend = "postgres"
-
-[remotes.staging]
-project_id = "ngxyuzljaoeeoedykdsd"
 
 # Experimental features may be deprecated any time
 [experimental]
