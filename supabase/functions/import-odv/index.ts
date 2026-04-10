@@ -61,6 +61,16 @@ const REQUIRED_COLUMNS = [
 
 const BATCH_SIZE = 100;
 
+// SKU rename map: promotional codes → sales codes (Trico Advance)
+const SKU_RENAME: Record<string, string> = {
+  Y317: "P858",
+  Y517: "P861",
+  Y601: "P867",
+  Y756: "P868",
+  Y757: "P869",
+  Y758: "P876",
+};
+
 // --- Supabase client ---
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -278,7 +288,8 @@ function processFile(
 
     const odvId = row["Orden de venta nº"];
     const fechaRaw = row["Fecha del pedido"];
-    const sku = row["SKU"];
+    const rawSku = row["SKU"];
+    const sku = SKU_RENAME[rawSku] ?? rawSku; // Remap promotional → sales codes
     const codigoCliente = row["Código Cliente"];
     const cantidadRaw = row["Piezas Vendidas Fac"];
     const estadoFactura = row["Estado de la factura"];

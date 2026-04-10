@@ -519,12 +519,27 @@ async function createSignedJwt(
   return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
+function parseServiceAccountKey(): { client_email: string; private_key: string } {
+  if (!GCP_SERVICE_ACCOUNT_KEY) {
+    throw new Error("GCP_SERVICE_ACCOUNT_KEY is not set");
+  }
+  const raw = GCP_SERVICE_ACCOUNT_KEY.trim();
+  // Raw JSON (not base64-encoded)
+  if (raw.startsWith("{")) {
+    return JSON.parse(raw);
+  }
+  // Base64-encoded JSON: strip whitespace, fix URL-safe chars, restore padding
+  let b64 = raw.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4 !== 0) b64 += "=";
+  return JSON.parse(atob(b64));
+}
+
 async function getAccessToken(): Promise<string> {
   if (accessTokenCache && Date.now() < accessTokenCache.expiry) {
     return accessTokenCache.token;
   }
 
-  const keyJson = JSON.parse(atob(GCP_SERVICE_ACCOUNT_KEY));
+  const keyJson = parseServiceAccountKey();
   const jwt = await createSignedJwt(keyJson);
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -556,7 +571,7 @@ async function getIdentityToken(): Promise<string> {
     return identityTokenCache.token;
   }
 
-  const keyJson = JSON.parse(atob(GCP_SERVICE_ACCOUNT_KEY));
+  const keyJson = parseServiceAccountKey();
   const jwt = await createSignedJwt(keyJson, { targetAudience: CLOUD_RUN_URL });
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -1629,36 +1644,69 @@ async function handleAgentEngineResponse(
       try {
         // Get access token for Vertex AI
         const token = await getAccessToken();
-
-        // Build the input for the Agent Engine query
-        // Pass conversation context + user identity so the agent has full context
-        const agentInput = {
-          input: [
-            conversationHistory,
-            `\nUSER: user_id=${user.user_id}, role=${user.role}`,
-            `\nMensaje actual: ${userMessage}`,
-          ].join(""),
+        const authHeaders = {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         };
 
-        // Call Agent Engine query endpoint
-        const url = `https://aiplatform.googleapis.com/v1/${AGENT_ENGINE_RESOURCE_NAME}:query`;
-        const res = await fetch(url, {
+        // Build the message with conversation context + user identity
+        const fullInput = [
+          conversationHistory,
+          `\nUSER: user_id=${user.user_id}, role=${user.role}`,
+          `\nMensaje actual: ${userMessage}`,
+        ].join("");
+
+        // Call stream_query — auto-creates ephemeral session via InMemorySessionService
+        const streamUrl = `https://us-central1-aiplatform.googleapis.com/v1/${AGENT_ENGINE_RESOURCE_NAME}:streamQuery`;
+        const streamRes = await fetch(streamUrl, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ input: agentInput }),
+          headers: authHeaders,
+          body: JSON.stringify({
+            class_method: "stream_query",
+            input: {
+              user_id: user.user_id,
+              message: fullInput,
+            },
+          }),
           signal: req.signal,
         });
 
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Agent Engine error (${res.status}): ${errText}`);
+        if (!streamRes.ok) {
+          const errText = await streamRes.text();
+          throw new Error(`Agent Engine stream_query error (${streamRes.status}): ${errText}`);
         }
 
-        const data = await res.json();
-        const fullText: string = data.output ?? "";
+        // Parse streamed response — collect final agent text
+        const responseText = await streamRes.text();
+        console.log("[AE] stream_query raw response (first 2000 chars):", responseText.slice(0, 2000));
+        let fullText = "";
+        for (const line of responseText.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const obj = JSON.parse(trimmed);
+            // ADK streamQuery returns events with content.parts[].text
+            const parts = obj?.content?.parts ?? [];
+            for (const part of parts) {
+              if (part?.text) fullText += part.text;
+            }
+            // Also check nested: obj.output (wrapped response)
+            if (obj?.output) {
+              const output = typeof obj.output === "string" ? obj.output : "";
+              if (output && !fullText) fullText = output;
+            }
+            // Check for result field (some ADK versions)
+            if (obj?.result?.content?.parts) {
+              for (const part of obj.result.content.parts) {
+                if (part?.text) fullText += part.text;
+              }
+            }
+          } catch {
+            // Skip non-JSON lines
+          }
+        }
+
+        console.log("[AE] extracted fullText length:", fullText.length, "preview:", fullText.slice(0, 200));
 
         if (!fullText.trim()) {
           // Empty response — refund query
