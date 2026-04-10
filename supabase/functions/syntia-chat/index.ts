@@ -50,6 +50,13 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GCP_PROJECT_ID = Deno.env.get("GCP_PROJECT_ID")!;
 const GCP_SERVICE_ACCOUNT_KEY = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY")!;
 
+// Cloud Run ADK agent (preferred — set CLOUD_RUN_URL to enable)
+const CLOUD_RUN_URL = Deno.env.get("CLOUD_RUN_URL") ?? "";
+
+// Agent Engine feature flag (legacy fallback)
+const USE_AGENT_ENGINE = Deno.env.get("USE_AGENT_ENGINE") === "true";
+const AGENT_ENGINE_RESOURCE_NAME = Deno.env.get("AGENT_ENGINE_RESOURCE_NAME") ?? "";
+
 const VERTEX_MODEL = "gemini-2.5-flash";
 const EMBEDDING_MODEL = "text-embedding-005";
 const EMBEDDING_DIMENSION = 768;
@@ -462,19 +469,27 @@ function base64UrlEncode(data: Uint8Array): string {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function createSignedJwt(serviceAccount: {
-  client_email: string;
-  private_key: string;
-}): Promise<string> {
+async function createSignedJwt(
+  serviceAccount: { client_email: string; private_key: string },
+  options?: { targetAudience?: string }
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
-  const payload = {
+  // deno-lint-ignore no-explicit-any
+  const payload: Record<string, any> = {
     iss: serviceAccount.client_email,
-    scope: "https://www.googleapis.com/auth/cloud-platform",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
   };
+  if (options?.targetAudience) {
+    // Identity token (for Cloud Run auth)
+    payload.sub = serviceAccount.client_email;
+    payload.target_audience = options.targetAudience;
+  } else {
+    // Access token (for Vertex AI APIs)
+    payload.scope = "https://www.googleapis.com/auth/cloud-platform";
+  }
 
   const encoder = new TextEncoder();
   const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
@@ -504,12 +519,27 @@ async function createSignedJwt(serviceAccount: {
   return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
+function parseServiceAccountKey(): { client_email: string; private_key: string } {
+  if (!GCP_SERVICE_ACCOUNT_KEY) {
+    throw new Error("GCP_SERVICE_ACCOUNT_KEY is not set");
+  }
+  const raw = GCP_SERVICE_ACCOUNT_KEY.trim();
+  // Raw JSON (not base64-encoded)
+  if (raw.startsWith("{")) {
+    return JSON.parse(raw);
+  }
+  // Base64-encoded JSON: strip whitespace, fix URL-safe chars, restore padding
+  let b64 = raw.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4 !== 0) b64 += "=";
+  return JSON.parse(atob(b64));
+}
+
 async function getAccessToken(): Promise<string> {
   if (accessTokenCache && Date.now() < accessTokenCache.expiry) {
     return accessTokenCache.token;
   }
 
-  const keyJson = JSON.parse(atob(GCP_SERVICE_ACCOUNT_KEY));
+  const keyJson = parseServiceAccountKey();
   const jwt = await createSignedJwt(keyJson);
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -528,6 +558,38 @@ async function getAccessToken(): Promise<string> {
     expiry: Date.now() + TOKEN_CACHE_TTL,
   };
   return data.access_token;
+}
+
+// ============================================================================
+// Cloud Run Identity Token (for IAM-authenticated Cloud Run services)
+// ============================================================================
+
+let identityTokenCache: { token: string; expiry: number } | null = null;
+
+async function getIdentityToken(): Promise<string> {
+  if (identityTokenCache && Date.now() < identityTokenCache.expiry) {
+    return identityTokenCache.token;
+  }
+
+  const keyJson = parseServiceAccountKey();
+  const jwt = await createSignedJwt(keyJson, { targetAudience: CLOUD_RUN_URL });
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Identity token exchange failed: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  identityTokenCache = {
+    token: data.id_token,
+    expiry: Date.now() + TOKEN_CACHE_TTL,
+  };
+  return data.id_token;
 }
 
 // ============================================================================
@@ -751,9 +813,54 @@ async function executeTool(
           match_count: idCliente ? 25 : 10, // fetch more when filtering
         });
         if (error) return `Error: ${error.message}`;
-        if (!data?.length) return "No se encontraron medicamentos relevantes.";
 
-        let results = data as AnyRow[];
+        let results = (data ?? []) as AnyRow[];
+
+        // ── Hybrid search: fallback fuzzy si embeddings no encuentran nada ──
+        if (results.length === 0) {
+          const { data: fuzzyData } = await chatbot.rpc(
+            "fuzzy_search_medications",
+            { p_search: query, p_limit: 10 }
+          );
+
+          if (fuzzyData?.length) {
+            const fuzzySkus = (fuzzyData as AnyRow[]).map((m) => m.sku);
+
+            // Fetch full medication data + conditions for matched SKUs
+            const [medsRes, condRes] = await Promise.all([
+              chatbot
+                .from("medications")
+                .select("sku, brand, description, content, price")
+                .in("sku", fuzzySkus),
+              chatbot
+                .from("medication_conditions")
+                .select("sku, conditions:conditions(name)")
+                .in("sku", fuzzySkus),
+            ]);
+
+            if (medsRes.data?.length) {
+              const condMap = new Map<string, string[]>();
+              if (condRes.data) {
+                for (const mc of condRes.data as AnyRow[]) {
+                  const list = condMap.get(mc.sku) ?? [];
+                  if (mc.conditions?.name) list.push(mc.conditions.name);
+                  condMap.set(mc.sku, list);
+                }
+              }
+
+              results = (medsRes.data as AnyRow[]).map((m) => ({
+                ...m,
+                conditions: condMap.get(m.sku)?.join(", ") ?? null,
+              }));
+
+              console.log(
+                `[Fuzzy search] Embedding miss, fuzzy fallback found ${results.length} results for "${query}"`
+              );
+            }
+          }
+        }
+
+        if (!results.length) return "No se encontraron medicamentos relevantes.";
 
         // When recommending for a specific doctor: exclude existing products + enrich with sales data
         if (idCliente) {
@@ -824,16 +931,47 @@ async function executeTool(
 
       case "search_fichas_tecnicas": {
         const query = args.query as string;
-        const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
-        const { data, error } = await chatbot.rpc("match_data_sheets", {
-          query_embedding: JSON.stringify(embedding),
-          match_threshold: 0.60,
-          match_count: 3,
-        });
-        if (error) return `Error: ${error.message}`;
-        if (!data?.length)
+        let sheets: AnyRow[] = [];
+
+        // ── Step 1: Resolve query → SKUs via fuzzy search (handles typos + accents) ──
+        const { data: medMatches } = await chatbot.rpc(
+          "fuzzy_search_medications",
+          { p_search: query, p_limit: 5 }
+        );
+
+        // ── Step 2: Fetch data sheet chunks for matched SKUs ──
+        if (medMatches?.length) {
+          const skus = (medMatches as AnyRow[]).map((m) => m.sku);
+          const { data: chunkData } = await chatbot
+            .from("data_sheet_chunks")
+            .select("sku, content, chunk_index")
+            .in("sku", skus)
+            .order("sku")
+            .order("chunk_index");
+
+          if (chunkData?.length) {
+            sheets = chunkData as AnyRow[];
+            console.log(
+              `[Fuzzy search] Resolved ${skus.length} medications, found ${sheets.length} data sheet chunks for "${query}"`
+            );
+          }
+        }
+
+        // ── Step 3: Fallback to embedding search for semantic queries ──
+        if (sheets.length === 0) {
+          const embedding = await generateEmbedding(query, "RETRIEVAL_QUERY");
+          const { data, error } = await chatbot.rpc("match_data_sheets", {
+            query_embedding: JSON.stringify(embedding),
+            match_threshold: 0.60,
+            match_count: 3,
+          });
+          if (error) return `Error: ${error.message}`;
+          sheets = (data ?? []) as AnyRow[];
+        }
+
+        if (!sheets.length)
           return "No se encontro informacion tecnica relevante.";
-        return (data as AnyRow[])
+        return sheets
           .map((f) => `[${f.sku}]:\n${f.content}`)
           .join("\n\n");
       }
@@ -1469,6 +1607,470 @@ async function handleHistory(
 }
 
 // ============================================================================
+// Agent Engine Proxy — queries ADK agent and relays response as SSE
+// ============================================================================
+
+async function handleAgentEngineResponse(
+  req: Request,
+  conversationHistory: string,
+  userMessage: string,
+  conversationId: string,
+  clienteId: string | null,
+  usage: UsageResult,
+  history: {
+    summary: string | null;
+    messages: Array<{ role: string; content: string }>;
+  },
+  startTime: number,
+  user: UserInfo
+): Promise<Response> {
+  const encoder = new TextEncoder();
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const safeEnqueue = (data: string): boolean => {
+    if (req.signal.aborted || !controllerRef) return false;
+    try {
+      controllerRef.enqueue(encoder.encode(data));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controllerRef = controller;
+
+      try {
+        // Get access token for Vertex AI
+        const token = await getAccessToken();
+        const authHeaders = {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        };
+
+        // Build the message with conversation context + user identity
+        const fullInput = [
+          conversationHistory,
+          `\nUSER: user_id=${user.user_id}, role=${user.role}`,
+          `\nMensaje actual: ${userMessage}`,
+        ].join("");
+
+        // Call stream_query — auto-creates ephemeral session via InMemorySessionService
+        const streamUrl = `https://us-central1-aiplatform.googleapis.com/v1/${AGENT_ENGINE_RESOURCE_NAME}:streamQuery`;
+        const streamRes = await fetch(streamUrl, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            class_method: "stream_query",
+            input: {
+              user_id: user.user_id,
+              message: fullInput,
+            },
+          }),
+          signal: req.signal,
+        });
+
+        if (!streamRes.ok) {
+          const errText = await streamRes.text();
+          throw new Error(`Agent Engine stream_query error (${streamRes.status}): ${errText}`);
+        }
+
+        // Parse streamed response — collect final agent text
+        const responseText = await streamRes.text();
+        console.log("[AE] stream_query raw response (first 2000 chars):", responseText.slice(0, 2000));
+        let fullText = "";
+        for (const line of responseText.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const obj = JSON.parse(trimmed);
+            // ADK streamQuery returns events with content.parts[].text
+            const parts = obj?.content?.parts ?? [];
+            for (const part of parts) {
+              if (part?.text) fullText += part.text;
+            }
+            // Also check nested: obj.output (wrapped response)
+            if (obj?.output) {
+              const output = typeof obj.output === "string" ? obj.output : "";
+              if (output && !fullText) fullText = output;
+            }
+            // Check for result field (some ADK versions)
+            if (obj?.result?.content?.parts) {
+              for (const part of obj.result.content.parts) {
+                if (part?.text) fullText += part.text;
+              }
+            }
+          } catch {
+            // Skip non-JSON lines
+          }
+        }
+
+        console.log("[AE] extracted fullText length:", fullText.length, "preview:", fullText.slice(0, 200));
+
+        if (!fullText.trim()) {
+          // Empty response — refund query
+          await chatbot.rpc("rollback_usage", { p_user_id: user.user_id });
+          safeEnqueue(
+            `data: ${JSON.stringify({
+              d: true,
+              e: "EMPTY_RESPONSE",
+              r: usage.remaining,
+              l: usage.queries_limit,
+            })}\n\n`
+          );
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+
+        // Simulate streaming: send text in chunks to maintain SSE protocol
+        const CHUNK_SIZE = 80;
+        for (let i = 0; i < fullText.length; i += CHUNK_SIZE) {
+          if (req.signal.aborted) break;
+          const chunk = fullText.slice(i, i + CHUNK_SIZE);
+          safeEnqueue(`data: ${JSON.stringify({ t: chunk, d: false })}\n\n`);
+        }
+
+        // Store messages in DB
+        const latencyMs = Date.now() - startTime;
+        const insertResult = await chatbot
+          .from("messages")
+          .insert([
+            {
+              conversation_id: conversationId,
+              role: "user",
+              content: userMessage,
+              context_client_id: clienteId,
+            },
+            {
+              conversation_id: conversationId,
+              role: "assistant",
+              content: fullText,
+              context_client_id: clienteId,
+              latency_ms: latencyMs,
+            },
+          ])
+          .select("id, role");
+
+        const assistantMsgId =
+          insertResult.data?.find(
+            (m: { role: string }) => m.role === "assistant"
+          )?.id ?? null;
+
+        await chatbot
+          .from("conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", conversationId);
+
+        // Final SSE with metadata
+        safeEnqueue(
+          `data: ${JSON.stringify({
+            d: true,
+            cid: conversationId,
+            mid: assistantMsgId,
+            r: Math.max((usage.remaining ?? 1) - 1, 0),
+            l: usage.queries_limit,
+          })}\n\n`
+        );
+
+        try { controller.close(); } catch { /* already closed */ }
+
+        // Compaction (fire and forget)
+        const totalMessages = (history.messages.length ?? 0) + 2;
+        if (totalMessages >= COMPACTION_THRESHOLD && !history.summary) {
+          const allMsgs = [
+            ...history.messages,
+            { role: "user", content: userMessage },
+            { role: "assistant", content: fullText },
+          ];
+          compactConversation(conversationId, allMsgs).catch(() => {});
+        }
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : "Error al procesar";
+        console.error("Agent Engine proxy error:", errMsg);
+
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ d: true, e: errMsg })}\n\n`
+              )
+            );
+            controller.close();
+          } catch {
+            // Controller already closed
+          }
+        } else {
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+// ============================================================================
+// Cloud Run ADK Agent Proxy — calls ADK on Cloud Run and relays SSE
+// ============================================================================
+
+const ADK_APP_NAME = "syntia_agent";
+
+async function handleCloudRunResponse(
+  req: Request,
+  conversationHistory: string,
+  userMessage: string,
+  conversationId: string,
+  clienteId: string | null,
+  usage: UsageResult,
+  history: {
+    summary: string | null;
+    messages: Array<{ role: string; content: string }>;
+  },
+  startTime: number,
+  user: UserInfo
+): Promise<Response> {
+  const encoder = new TextEncoder();
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const safeEnqueue = (data: string): boolean => {
+    if (req.signal.aborted || !controllerRef) return false;
+    try {
+      controllerRef.enqueue(encoder.encode(data));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controllerRef = controller;
+
+      try {
+        const idToken = await getIdentityToken();
+
+        // Step 1: Create ephemeral ADK session
+        const createSessionUrl = `${CLOUD_RUN_URL}/apps/${ADK_APP_NAME}/users/${user.user_id}/sessions`;
+        const sessionRes = await fetch(createSessionUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            state: {
+              user_id: user.user_id,
+              role: user.role,
+            },
+          }),
+        });
+
+        if (!sessionRes.ok) {
+          const errText = await sessionRes.text();
+          throw new Error(
+            `ADK session creation failed (${sessionRes.status}): ${errText}`
+          );
+        }
+
+        const sessionData = await sessionRes.json();
+        const sessionId: string = sessionData.id;
+
+        // Step 2: Send message with conversation context
+        const messageContent = [
+          conversationHistory,
+          `\nUSER: user_id=${user.user_id}, role=${user.role}`,
+          `\nMensaje actual: ${userMessage}`,
+        ].join("");
+
+        const runUrl = `${CLOUD_RUN_URL}/apps/${ADK_APP_NAME}/users/${user.user_id}/sessions/${sessionId}`;
+        const runRes = await fetch(runUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            new_message: {
+              role: "user",
+              parts: [{ text: messageContent }],
+            },
+            streaming: true,
+          }),
+          signal: req.signal,
+        });
+
+        if (!runRes.ok) {
+          const errText = await runRes.text();
+          throw new Error(
+            `Cloud Run agent error (${runRes.status}): ${errText}`
+          );
+        }
+
+        // Step 3: Read SSE stream from Cloud Run and proxy text to client
+        let fullText = "";
+        const reader = runRes.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        // Keepalive every 10s to prevent client timeout during tool execution
+        const keepaliveInterval = setInterval(() => {
+          safeEnqueue(`data: ${JSON.stringify({ t: "", d: false })}\n\n`);
+        }, 10_000);
+
+        try {
+          while (true) {
+            if (req.signal.aborted) break;
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr || jsonStr === "[DONE]") continue;
+
+              try {
+                const event = JSON.parse(jsonStr);
+                const parts = event.content?.parts ?? [];
+
+                for (const part of parts) {
+                  // Only proxy text parts (skip functionCall/functionResponse)
+                  if (part.text && !part.functionCall && !part.functionResponse) {
+                    fullText += part.text;
+                    safeEnqueue(
+                      `data: ${JSON.stringify({ t: part.text, d: false })}\n\n`
+                    );
+                  }
+                }
+
+                // Send keepalive for non-text events (tool calls, etc.)
+                if (!parts.some((p: GeminiPart) => p.text && !p.functionCall)) {
+                  safeEnqueue(
+                    `data: ${JSON.stringify({ t: "", d: false })}\n\n`
+                  );
+                }
+              } catch {
+                // Skip unparseable SSE events
+              }
+            }
+          }
+        } finally {
+          clearInterval(keepaliveInterval);
+        }
+
+        // Handle empty response
+        if (!fullText.trim()) {
+          await chatbot.rpc("rollback_usage", { p_user_id: user.user_id });
+          safeEnqueue(
+            `data: ${JSON.stringify({
+              d: true,
+              e: "EMPTY_RESPONSE",
+              r: usage.remaining,
+              l: usage.queries_limit,
+            })}\n\n`
+          );
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+
+        // Store messages in DB
+        const latencyMs = Date.now() - startTime;
+        const insertResult = await chatbot
+          .from("messages")
+          .insert([
+            {
+              conversation_id: conversationId,
+              role: "user",
+              content: userMessage,
+              context_client_id: clienteId,
+            },
+            {
+              conversation_id: conversationId,
+              role: "assistant",
+              content: fullText,
+              context_client_id: clienteId,
+              latency_ms: latencyMs,
+            },
+          ])
+          .select("id, role");
+
+        const assistantMsgId =
+          insertResult.data?.find(
+            (m: { role: string }) => m.role === "assistant"
+          )?.id ?? null;
+
+        await chatbot
+          .from("conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", conversationId);
+
+        // Final SSE with metadata
+        safeEnqueue(
+          `data: ${JSON.stringify({
+            d: true,
+            cid: conversationId,
+            mid: assistantMsgId,
+            r: Math.max((usage.remaining ?? 1) - 1, 0),
+            l: usage.queries_limit,
+          })}\n\n`
+        );
+
+        try { controller.close(); } catch { /* already closed */ }
+
+        // Compaction (fire and forget)
+        const totalMessages = (history.messages.length ?? 0) + 2;
+        if (totalMessages >= COMPACTION_THRESHOLD && !history.summary) {
+          const allMsgs = [
+            ...history.messages,
+            { role: "user", content: userMessage },
+            { role: "assistant", content: fullText },
+          ];
+          compactConversation(conversationId, allMsgs).catch(() => {});
+        }
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : "Error al procesar";
+        console.error("Cloud Run proxy error:", errMsg);
+
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ d: true, e: errMsg })}\n\n`
+              )
+            );
+            controller.close();
+          } catch {
+            // Controller already closed
+          }
+        } else {
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+// ============================================================================
 // Send Message Handler
 // ============================================================================
 
@@ -1489,13 +2091,16 @@ async function handleSendMessage(
   const startTime = Date.now();
   const useStreaming = body.stream !== false;
 
-  // 1. Rate limit + OAuth pre-warm in parallel
+  // 1. Rate limit + auth pre-warm in parallel
+  const tokenPrewarm = CLOUD_RUN_URL
+    ? getIdentityToken().catch(() => null)
+    : getAccessToken().catch(() => null);
   const [usageResult, _token] = await Promise.all([
     chatbot.rpc("check_and_increment_usage", {
       p_user_id: user.user_id,
       p_role: user.role,
     }),
-    getAccessToken().catch(() => null),
+    tokenPrewarm,
   ]);
 
   if (usageResult.error) {
@@ -1568,7 +2173,50 @@ async function handleSendMessage(
       prevSummaries ? `\n\n${prevSummaries}` : "",
     ].join("");
 
-    // 5. Stream or non-stream (pass user for tool execution)
+    // 5. Route to Cloud Run ADK, Agent Engine, or legacy Gemini
+    if (CLOUD_RUN_URL || (USE_AGENT_ENGINE && AGENT_ENGINE_RESOURCE_NAME)) {
+      // Build conversation context string for ADK agent
+      const contextParts: string[] = [];
+      if (history.summary) {
+        contextParts.push(`[Resumen previo: ${history.summary}]`);
+      }
+      const recentMsgs = history.messages.slice(-MAX_HISTORY_MESSAGES);
+      for (const m of recentMsgs) {
+        contextParts.push(`${m.role === "assistant" ? "Asistente" : "Usuario"}: ${m.content}`);
+      }
+      if (prevSummaries) {
+        contextParts.push(prevSummaries);
+      }
+      const conversationHistory = contextParts.join("\n");
+
+      if (CLOUD_RUN_URL) {
+        return handleCloudRunResponse(
+          req,
+          conversationHistory,
+          body.message,
+          conversationId!,
+          body.context_client_id || null,
+          usage,
+          history,
+          startTime,
+          user
+        );
+      }
+
+      return handleAgentEngineResponse(
+        req,
+        conversationHistory,
+        body.message,
+        conversationId!,
+        body.context_client_id || null,
+        usage,
+        history,
+        startTime,
+        user
+      );
+    }
+
+    // Legacy: direct Gemini function calling
     if (useStreaming) {
       return handleStreamingResponse(
         req,
