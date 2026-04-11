@@ -42,7 +42,7 @@ BEGIN
       'cabinet_inventory',
       'lots-reconciliation-20260411',
       'UPDATE',
-      'migration',
+      NULL,
       jsonb_build_object(
         'reason', 'Reconcile cabinet_inventory with active lots (source of truth)',
         'rows_fixed', v_fixed
