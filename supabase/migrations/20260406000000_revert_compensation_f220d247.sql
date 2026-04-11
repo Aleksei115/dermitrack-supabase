@@ -55,15 +55,18 @@ BEGIN
   -- ── Sanity checks ──
   PERFORM 1 FROM visits WHERE visit_id = c_visit_id AND workflow_status = 'COMPENSATED';
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Visit % is not in COMPENSATED state - aborting revert', c_visit_id;
+    RAISE NOTICE 'Visit % is not in COMPENSATED state - skipping revert (compensation never applied)', c_visit_id;
+    RETURN;
   END IF;
 
   IF EXISTS (SELECT 1 FROM inventory_movements WHERE visit_id = c_visit_id) THEN
-    RAISE EXCEPTION 'Visit % already has movements - aborting to avoid duplicates', c_visit_id;
+    RAISE NOTICE 'Visit % already has movements - skipping revert (not needed)', c_visit_id;
+    RETURN;
   END IF;
 
   IF EXISTS (SELECT 1 FROM cabinet_inventory_lots WHERE visit_id = c_visit_id) THEN
-    RAISE EXCEPTION 'Visit % already has lots - aborting to avoid duplicates', c_visit_id;
+    RAISE NOTICE 'Visit % already has lots - skipping revert (not needed)', c_visit_id;
+    RETURN;
   END IF;
 
   -- ── Disable triggers (per user decision: manual cabinet_inventory adjustment) ──
